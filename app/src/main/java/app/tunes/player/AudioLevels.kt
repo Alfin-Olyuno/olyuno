@@ -48,7 +48,7 @@ class AudioLevels : TeeAudioProcessor.AudioBufferSink {
         rate = sampleRateHz.coerceAtLeast(8_000)
         channels = channelCount.coerceAtLeast(1)
         this.encoding = encoding
-        hopFrames = (rate * HOP_MS / 1000).coerceAtLeast(1)
+        hopFrames = (rate * HOP_MS / 1000).toInt().coerceAtLeast(1)
         for (i in 0 until 3) a[i] = (1.0 - exp(-2.0 * Math.PI * CROSSOVER_HZ[i] / rate)).toFloat()
         s1.fill(0f); s2.fill(0f); sumSq.fill(0.0)
         inHop = 0
