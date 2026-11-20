@@ -48,6 +48,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.flow.map
 import app.tunes.MainViewModel
 import app.tunes.data.PlayRow
 import app.tunes.data.toStats
@@ -150,8 +151,8 @@ fun StatisticsPage(
     var kind by rememberSaveable { mutableIntStateOf(0) }
 
     val from = remember(scope, range) { fromMillis(scope, range) }
-    val rows by remember(from) { vm.playRows(from) }
-        .collectAsStateWithLifecycle<List<PlayRow>, List<PlayRow>?>(initialValue = null)
+    val rows: List<PlayRow>? by remember(from) { vm.playRows(from).map<List<PlayRow>, List<PlayRow>?> { it } }
+        .collectAsStateWithLifecycle(initialValue = null)
     val stats = remember(rows) { rows?.toStats(LIST_LIMIT) }
 
     SubPage(title = t("Statistik"), vm = vm, player = player, onBack = onBack, onOpenPlayer = onOpenPlayer) {

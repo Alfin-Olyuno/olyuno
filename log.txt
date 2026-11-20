@@ -1,0 +1,103 @@
+build	Build APK	﻿2026-11-20T07:23:20.1878081Z ##[group]Run chmod +x gradlew
+build	Build APK	2026-11-20T07:23:20.1878437Z ^[[36;1mchmod +x gradlew^[[0m
+build	Build APK	2026-11-20T07:23:20.1878684Z ^[[36;1m./gradlew assembleRelease --no-daemon^[[0m
+build	Build APK	2026-11-20T07:23:20.1924224Z shell: /usr/bin/bash -e {0}
+build	Build APK	2026-11-20T07:23:20.1924586Z env:
+build	Build APK	2026-11-20T07:23:20.1924768Z   JAVA_HOME: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/17.0.21-9/x64
+build	Build APK	2026-11-20T07:23:20.1925035Z   JAVA_HOME_17_X64: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/17.0.21-9/x64
+build	Build APK	2026-11-20T07:23:20.1925264Z   GRADLE_ACTION_ID: gradle/actions/setup-gradle
+build	Build APK	2026-11-20T07:23:20.1925435Z   GRADLE_USER_HOME: /home/runner/.gradle
+build	Build APK	2026-11-20T07:23:20.1925601Z   GRADLE_BUILD_ACTION_SETUP_COMPLETED: true
+build	Build APK	2026-11-20T07:23:20.1925763Z   GRADLE_BUILD_ACTION_CACHE_RESTORED: true
+build	Build APK	2026-11-20T07:23:20.1925998Z   DEVELOCITY_INJECTION_INIT_SCRIPT_NAME: gradle-actions.inject-develocity.init.gradle
+build	Build APK	2026-11-20T07:23:20.1926252Z   DEVELOCITY_INJECTION_CUSTOM_VALUE: gradle-actions
+build	Build APK	2026-11-20T07:23:20.1926427Z   GITHUB_DEPENDENCY_GRAPH_ENABLED: false
+build	Build APK	2026-11-20T07:23:20.1926618Z ##[endgroup]
+build	Build APK	2026-11-20T07:23:20.7348723Z Downloading https://services.gradle.org/distributions/gradle-8.10.2-bin.zip
+build	Build APK	2026-11-20T07:23:22.9975543Z .............10%.............20%.............30%.............40%.............50%.............60%.............70%.............80%.............90%.............100%
+build	Build APK	2026-11-20T07:23:24.0700521Z 
+build	Build APK	2026-11-20T07:23:24.0701174Z Welcome to Gradle 8.10.2!
+build	Build APK	2026-11-20T07:23:24.0701871Z 
+build	Build APK	2026-11-20T07:23:24.0717878Z Here are the highlights of this release:
+build	Build APK	2026-11-20T07:23:24.0718328Z  - Support for Java 23
+build	Build APK	2026-11-20T07:23:24.0718577Z  - Faster configuration cache
+build	Build APK	2026-11-20T07:23:24.0718816Z  - Better configuration cache reports
+build	Build APK	2026-11-20T07:23:24.0718979Z 
+build	Build APK	2026-11-20T07:23:24.0719159Z For more details see https://docs.gradle.org/8.10.2/release-notes.html
+build	Build APK	2026-11-20T07:23:24.0719410Z 
+build	Build APK	2026-11-20T07:23:24.2722557Z To honour the JVM settings for this build a single-use Daemon process will be forked. For more on this, please refer to https://docs.gradle.org/8.10.2/userguide/gradle_daemon.html#sec:disabling_the_daemon in the Gradle documentation.
+build	Build APK	2026-11-20T07:23:25.5714495Z Daemon will be stopped at the end of the build 
+build	Build APK	2026-11-20T07:24:34.4706450Z > Task :app:preBuild UP-TO-DATE
+build	Build APK	2026-11-20T07:24:34.4708814Z > Task :app:preReleaseBuild UP-TO-DATE
+build	Build APK	2026-11-20T07:24:34.5694566Z > Task :app:mergeReleaseJniLibFolders
+build	Build APK	2026-11-20T07:24:57.0688120Z > Task :app:mergeReleaseNativeLibs
+build	Build APK	2026-11-20T07:24:57.5708438Z > Task :app:checkReleaseDuplicateClasses
+build	Build APK	2026-11-20T07:24:57.5728174Z 
+build	Build APK	2026-11-20T07:24:57.5728566Z > Task :app:stripReleaseDebugSymbols
+build	Build APK	2026-11-20T07:24:57.5756701Z Unable to strip the following libraries, packaging them as they are: libandroidx.graphics.path.so.
+build	Build APK	2026-11-20T07:24:57.5778676Z 
+build	Build APK	2026-11-20T07:24:57.5798257Z > Task :app:extractReleaseNativeSymbolTables
+build	Build APK	2026-11-20T07:24:57.5814610Z > Task :app:buildKotlinToolingMetadata
+build	Build APK	2026-11-20T07:24:57.5832620Z > Task :app:mergeReleaseNativeDebugMetadata NO-SOURCE
+build	Build APK	2026-11-20T07:24:57.5847835Z > Task :app:checkKotlinGradlePluginConfigurationErrors SKIPPED
+build	Build APK	2026-11-20T07:24:57.6699510Z > Task :app:generateReleaseResValues
+build	Build APK	2026-11-20T07:24:57.7709100Z > Task :app:checkReleaseAarMetadata
+build	Build APK	2026-11-20T07:24:57.7777564Z > Task :app:mapReleaseSourceSetPaths
+build	Build APK	2026-11-20T07:24:57.7797551Z > Task :app:generateReleaseResources
+build	Build APK	2026-11-20T07:24:59.1688457Z > Task :app:createReleaseCompatibleScreenManifests
+build	Build APK	2026-11-20T07:24:59.1726904Z > Task :app:extractDeepLinksRelease
+build	Build APK	2026-11-20T07:24:59.8688037Z > Task :app:processReleaseMainManifest
+build	Build APK	2026-11-20T07:25:00.1709091Z > Task :app:processReleaseManifest
+build	Build APK	2026-11-20T07:25:00.2685450Z > Task :app:processReleaseManifestForPackage
+build	Build APK	2026-11-20T07:25:02.1684577Z > Task :app:mergeReleaseResources
+build	Build APK	2026-11-20T07:25:03.8686016Z > Task :app:javaPreCompileRelease
+build	Build APK	2026-11-20T07:25:03.8686706Z > Task :app:packageReleaseResources
+build	Build APK	2026-11-20T07:25:04.7704723Z > Task :app:desugarReleaseFileDependencies
+build	Build APK	2026-11-20T07:25:04.7705490Z > Task :app:mergeReleaseStartupProfile
+build	Build APK	2026-11-20T07:25:33.8707957Z > Task :app:parseReleaseLocalResources
+build	Build APK	2026-11-20T07:25:34.7688175Z > Task :app:mergeExtDexRelease
+build	Build APK	2026-11-20T07:26:21.0708087Z > Task :app:processReleaseResources
+build	Build APK	2026-11-20T07:26:31.3701957Z > Task :app:mergeReleaseArtProfile
+build	Build APK	2026-11-20T07:26:31.3744801Z > Task :app:mergeReleaseShaders
+build	Build APK	2026-11-20T07:26:31.3768610Z > Task :app:compileReleaseShaders NO-SOURCE
+build	Build APK	2026-11-20T07:26:31.3849272Z > Task :app:generateReleaseAssets UP-TO-DATE
+build	Build APK	2026-11-20T07:26:31.5686047Z > Task :app:mergeReleaseAssets
+build	Build APK	2026-11-20T07:26:31.6718134Z > Task :app:compressReleaseAssets
+build	Build APK	2026-11-20T07:26:31.7685571Z > Task :app:extractReleaseVersionControlInfo
+build	Build APK	2026-11-20T07:26:32.0758107Z > Task :app:optimizeReleaseResources
+build	Build APK	2026-11-20T07:26:32.2712620Z > Task :app:collectReleaseDependencies
+build	Build APK	2026-11-20T07:26:32.3708215Z > Task :app:sdkReleaseDependencyData
+build	Build APK	2026-11-20T07:26:33.4698102Z > Task :app:validateSigningRelease
+build	Build APK	2026-11-20T07:26:33.4699995Z > Task :app:writeReleaseAppMetadata
+build	Build APK	2026-11-20T07:26:33.5708116Z > Task :app:writeReleaseSigningConfigVersions
+build	Build APK	2026-11-20T07:26:38.7688004Z > Task :app:kspReleaseKotlin
+build	Build APK	2026-11-20T07:26:55.4701299Z e: file:///home/runner/work/olyuno/olyuno/app/src/main/java/app/tunes/player/AudioLevels.kt:51:21 Assignment type mismatch: actual type is 'kotlin.Long', but 'kotlin.Int' was expected.
+build	Build APK	2026-11-20T07:26:55.4702046Z 
+build	Build APK	2026-11-20T07:26:55.4717584Z > Task :app:compileReleaseKotlin FAILED
+build	Build APK	2026-11-20T07:26:55.4737857Z e: file:///home/runner/work/olyuno/olyuno/app/src/main/java/app/tunes/ui/AboutPage.kt:166:9 Unresolved reference 'Image'.
+build	Build APK	2026-11-20T07:26:55.4748083Z e: file:///home/runner/work/olyuno/olyuno/app/src/main/java/app/tunes/ui/AboutPage.kt:167:23 Unresolved reference 'painterResource'.
+build	Build APK	2026-11-20T07:26:55.4767923Z e: file:///home/runner/work/olyuno/olyuno/app/src/main/java/app/tunes/ui/AboutPage.kt:167:39 Unresolved reference 'R'.
+build	Build APK	2026-11-20T07:26:55.4768791Z e: file:///home/runner/work/olyuno/olyuno/app/src/main/java/app/tunes/ui/AboutPage.kt:190:13 Unresolved reference 'Image'.
+build	Build APK	2026-11-20T07:26:55.4769632Z e: file:///home/runner/work/olyuno/olyuno/app/src/main/java/app/tunes/ui/AboutPage.kt:191:27 Unresolved reference 'painterResource'.
+build	Build APK	2026-11-20T07:26:55.4770445Z e: file:///home/runner/work/olyuno/olyuno/app/src/main/java/app/tunes/ui/AboutPage.kt:191:43 Unresolved reference 'R'.
+build	Build APK	2026-11-20T07:26:55.4771387Z e: file:///home/runner/work/olyuno/olyuno/app/src/main/java/app/tunes/ui/Landscape.kt:26:14 Functions which invoke @Composable functions must be marked with the @Composable annotation
+build	Build APK	2026-11-20T07:26:55.4772480Z e: file:///home/runner/work/olyuno/olyuno/app/src/main/java/app/tunes/ui/Landscape.kt:27:38 @Composable invocations can only happen from the context of a @Composable function
+build	Build APK	2026-11-20T07:26:55.4773498Z e: file:///home/runner/work/olyuno/olyuno/app/src/main/java/app/tunes/ui/StatisticsScreen.kt:154:84 Null cannot be a value of a non-null type 'T'.
+build	Build APK	2026-11-20T07:26:55.5685692Z gradle/actions: Writing build results to /home/runner/work/_temp/.gradle-actions/build-results/__run-1795159409336.json
+build	Build APK	2026-11-20T07:26:55.5690185Z 
+build	Build APK	2026-11-20T07:26:55.5690341Z 36 actionable tasks: 36 executed
+build	Build APK	2026-11-20T07:26:55.5690874Z FAILURE: Build failed with an exception.
+build	Build APK	2026-11-20T07:26:55.5691209Z 
+build	Build APK	2026-11-20T07:26:55.5691442Z * What went wrong:
+build	Build APK	2026-11-20T07:26:55.5691808Z Execution failed for task ':app:compileReleaseKotlin'.
+build	Build APK	2026-11-20T07:26:55.5692542Z > A failure occurred while executing org.jetbrains.kotlin.compilerRunner.GradleCompilerRunnerWithWorkers$GradleKotlinCompilerWorkAction
+build	Build APK	2026-11-20T07:26:55.5693188Z    > Compilation error. See log for more details
+build	Build APK	2026-11-20T07:26:55.5693471Z 
+build	Build APK	2026-11-20T07:26:55.5693651Z * Try:
+build	Build APK	2026-11-20T07:26:55.5693972Z > Run with --stacktrace option to get the stack trace.
+build	Build APK	2026-11-20T07:26:55.5694376Z > Run with --info or --debug option to get more log output.
+build	Build APK	2026-11-20T07:26:55.5694754Z > Run with --scan to get full insights.
+build	Build APK	2026-11-20T07:26:55.5695115Z > Get more help at https://help.gradle.org.
+build	Build APK	2026-11-20T07:26:55.5695388Z 
+build	Build APK	2026-11-20T07:26:55.5695572Z BUILD FAILED in 3m 35s
+build	Build APK	2026-11-20T07:26:56.0370037Z ##[error]Process completed with exit code 1.

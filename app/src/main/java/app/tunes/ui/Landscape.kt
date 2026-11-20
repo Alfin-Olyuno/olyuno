@@ -23,5 +23,6 @@ fun isLandscape(): Boolean {
  * Ruang aman di sisi kiri/kanan layar: lekuk kamera (notch) dan bilah navigasi tiga tombol yang pindah ke sisi
  * saat landscape. Di portrait nilainya 0, jadi tampilan portrait tidak berubah.
  */
+@Composable
 fun Modifier.safeHorizontalPadding(): Modifier =
     windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
