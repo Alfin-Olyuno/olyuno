@@ -1,0 +1,911 @@
+package app.tunes
+
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
+import app.tunes.data.Backup
+import app.tunes.data.BackupData
+import app.tunes.data.BackupFormatException
+import app.tunes.data.DownloadEntry
+import app.tunes.data.DownloadedCollection
+import app.tunes.data.HistoryEntry
+import app.tunes.innertube.AccountInfo
+import app.tunes.innertube.CollectionKind
+import app.tunes.innertube.CollectionRef
+import app.tunes.innertube.SearchResults
+import app.tunes.innertube.SongItem
+import app.tunes.innertube.accountInfo
+import app.tunes.innertube.isAuthError
+import app.tunes.innertube.fallbackGenres
+import app.tunes.innertube.genres
+import app.tunes.innertube.isLocal
+import app.tunes.innertube.isLocalId
+import app.tunes.innertube.CollectionData
+import app.tunes.innertube.CollectionInfo
+import app.tunes.innertube.loadCollection
+import app.tunes.innertube.quickPicks
+import app.tunes.innertube.trendingSongs
+import app.tunes.innertube.searchAll
+import app.tunes.innertube.searchSuggestions
+import kotlinx.coroutines.delay
+import app.tunes.lyrics.LyricsSource
+import app.tunes.lyrics.LyricsState
+import app.tunes.lyrics.TranslationState
+import app.tunes.player.EqState
+import app.tunes.player.PlayerConnection
+import app.tunes.player.PlayerState
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import app.tunes.i18n.t
+import app.tunes.i18n.userMessage
+
+sealed interface DeviceSongsState {
+    data object Loading : DeviceSongsState
+    data object Error : DeviceSongsState
+    data class Loaded(val songs: List<SongItem>) : DeviceSongsState
+}
+
+sealed interface CollectionState {
+    data object Loading : CollectionState
+    data class Error(val message: String) : CollectionState
+    data class Loaded(
+        val songs: List<SongItem>,
+        val info: CollectionInfo = CollectionInfo(),
+        val playlists: List<CollectionRef> = emptyList(),
+    ) : CollectionState
+}
+
+sealed interface SearchState {
+    data object Idle : SearchState
+    data object Loading : SearchState
+    data class Error(val message: String) : SearchState
+    data class Results(val results: SearchResults) : SearchState
+}
+
+@OptIn(ExperimentalCoroutinesApi::class)
+class MainViewModel(app: Application) : AndroidViewModel(app) {
+
+    private val container = (app as OlyunoApp).container
+    private val innerTube = container.innerTube
+    private val repo = container.songs
+
+    private val connection = PlayerConnection(app, viewModelScope)
+    val player: StateFlow<PlayerState> = connection.state
+
+    // ---------------------------------------------------------------- search
+    private val _query = MutableStateFlow("")
+    val query: StateFlow<String> = _query.asStateFlow()
+
+    private val _search = MutableStateFlow<SearchState>(SearchState.Idle)
+    val search: StateFlow<SearchState> = _search.asStateFlow()
+
+    private var searchJob: Job? = null
+
+    // Saran pencarian saat mengetik (dari YouTube Music).
+    private val _suggestions = MutableStateFlow<List<String>>(emptyList())
+    val suggestions: StateFlow<List<String>> = _suggestions.asStateFlow()
+    private var suggestJob: Job? = null
+    private val suggestCache = HashMap<String, List<String>>()
+
+    private fun updateSuggestions(q: String) {
+        suggestJob?.cancel()
+        val t = q.trim()
+        if (t.isEmpty()) {
+            _suggestions.value = emptyList()
+            return
+        }
+        suggestCache[t.lowercase()]?.let {
+            _suggestions.value = it
+            return
+        }
+        suggestJob = viewModelScope.launch {
+            // Tunggu sebentar: tidak mengirim permintaan untuk tiap huruf yang diketik cepat.
+            delay(250)
+            val list = try {
+                innerTube.searchSuggestions(t)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                emptyList()
+            }
+            if (list.isNotEmpty()) suggestCache[t.lowercase()] = list
+            _suggestions.value = list
+        }
+    }
+
+    fun onQueryChange(q: String) {
+        _query.value = q
+        updateSuggestions(q)
+        // Kolom dikosongkan -> kembali ke tampilan awal (riwayat terakhir diputar).
+        if (q.isBlank()) {
+            searchJob?.cancel()
+            _search.value = SearchState.Idle
+        }
+    }
+
+    fun submitSearch() {
+        val q = _query.value.trim()
+        if (q.isEmpty()) return
+        container.searchHistory.add(q)
+        suggestJob?.cancel()
+        _suggestions.value = emptyList()
+        searchJob?.cancel()
+        searchJob = viewModelScope.launch {
+            _search.value = SearchState.Loading
+            _search.value = try {
+                val results = innerTube.searchAll(q)
+                if (results.isEmpty) SearchState.Error(t("Tidak ada hasil untuk \"%s\"", q))
+                else SearchState.Results(results)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                SearchState.Error(e.userMessage("Gagal mencari"))
+            }
+        }
+    }
+
+    /** Riwayat kata kunci pencarian, terbaru di depan. */
+    val searchHistory: StateFlow<List<String>> = container.searchHistory.items
+
+    /** Ketuk salah satu riwayat: isi kolom lalu langsung cari. */
+    fun searchFromHistory(q: String) {
+        _query.value = q
+        submitSearch()
+    }
+
+    fun removeSearchHistory(q: String) = container.searchHistory.remove(q)
+    fun clearSearchHistory() = container.searchHistory.clear()
+
+    // ---- Penyimpanan (halaman Pengaturan > Penyimpanan)
+    val storage get() = container.storage
+    val audioCacheLimitMb: StateFlow<Int> = container.storagePrefs.audioCacheLimitMb
+    val downloadCollections = container.downloads.collections
+
+    // ------------------------------------------------------- Pilihan cepat
+    private val _quickPicks = MutableStateFlow<List<SongItem>?>(null)
+
+    /** null = sedang memuat; kosong = gagal / tidak ada. */
+    val quickPicks: StateFlow<List<SongItem>?> = _quickPicks.asStateFlow()
+
+    private var quickJob: Job? = null
+
+    fun loadQuickPicks(force: Boolean = false) {
+        if (!force && !_quickPicks.value.isNullOrEmpty()) return
+        quickJob?.cancel()
+        quickJob = viewModelScope.launch {
+            _quickPicks.value = null
+            // Benih acak dari 5 lagu terfavorit supaya tiap dibuka agak berbeda.
+            val seed = repo.mostPlayed.first().filter { !it.videoId.isLocalId() }.take(5).randomOrNull()?.videoId
+            _quickPicks.value = try {
+                innerTube.quickPicks(seed)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                emptyList()
+            }
+        }
+    }
+
+    // ------------------------------------------------------ Sedang trending
+    private val _trending = MutableStateFlow<List<SongItem>?>(null)
+
+    /** null = sedang memuat; kosong = gagal / tidak ada. */
+    val trending: StateFlow<List<SongItem>?> = _trending.asStateFlow()
+
+    private var trendingJob: Job? = null
+
+    fun loadTrending(force: Boolean = false) {
+        if (!force && !_trending.value.isNullOrEmpty()) return
+        trendingJob?.cancel()
+        trendingJob = viewModelScope.launch {
+            _trending.value = null
+            _trending.value = try {
+                innerTube.trendingSongs()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                emptyList()
+            }
+        }
+    }
+
+    // --------------------------------------------------------------- Genre
+    private val _genres = MutableStateFlow<List<CollectionRef>?>(null)
+
+    /** null = sedang memuat. Selalu terisi setelahnya (cadangan lokal bila jaringan gagal). */
+    val genres: StateFlow<List<CollectionRef>?> = _genres.asStateFlow()
+
+    fun loadGenres() {
+        if (_genres.value != null) return
+        viewModelScope.launch {
+            _genres.value = try {
+                innerTube.genres().ifEmpty { fallbackGenres }.shuffled()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                fallbackGenres.shuffled()
+            }
+        }
+    }
+
+    /** Acak urutan genre di beranda (dipanggil dari tombol acak). */
+    fun shuffleGenres() {
+        _genres.value = _genres.value?.shuffled()
+    }
+
+    // ------------------------------------------------------- lagu perangkat
+    private val _deviceSongs = MutableStateFlow<DeviceSongsState>(DeviceSongsState.Loading)
+    val deviceSongs: StateFlow<DeviceSongsState> = _deviceSongs.asStateFlow()
+    private var deviceJob: Job? = null
+
+    /** Muat ulang daftar lagu di perangkat (dipanggil setelah izin diberikan / halaman dibuka). */
+    fun loadDeviceSongs() {
+        deviceJob?.cancel()
+        deviceJob = viewModelScope.launch {
+            try {
+                _deviceSongs.value = DeviceSongsState.Loaded(container.localSongs.load())
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // Daftar lama (kalau ada) tetap dipakai.
+                if (_deviceSongs.value !is DeviceSongsState.Loaded) _deviceSongs.value = DeviceSongsState.Error
+            }
+        }
+    }
+
+    // ------------------------------------------- halaman koleksi (genre dll)
+    private val _openCollection = MutableStateFlow<CollectionRef?>(null)
+    val openCollection: StateFlow<CollectionRef?> = _openCollection.asStateFlow()
+
+    private val _collection = MutableStateFlow<CollectionState>(CollectionState.Loading)
+    val collection: StateFlow<CollectionState> = _collection.asStateFlow()
+
+    private val collectionCache = HashMap<String, CollectionData>()
+    private var collectionJob: Job? = null
+
+    /** Kunci paket unduhan yang sedang dibuka dari halaman Diunduh (null = koleksi online biasa). */
+    private var downloadedKey: String? = null
+
+    /** Halaman genre cepat yang jadi asal playlist yang sedang dibuka, supaya Kembali pulang ke genre itu. */
+    private var moodParent: CollectionRef? = null
+
+    fun openCollection(ref: CollectionRef) {
+        val current = _openCollection.value
+        moodParent = if (current?.kind == CollectionKind.MOOD && ref.kind != CollectionKind.MOOD) current else null
+        downloadedKey = null
+        _openCollection.value = ref
+        loadCollection(ref)
+    }
+
+    /** Buka paket playlist/album yang sudah diunduh: tampilan sama, isinya dari penyimpanan (tanpa internet). */
+    fun openDownloadedCollection(dc: DownloadedCollection) {
+        collectionJob?.cancel()
+        downloadedKey = dc.ref.key
+        _openCollection.value = dc.ref
+        _collection.value = downloadedState(dc)
+    }
+
+    /** Hanya lagu yang sudah selesai diunduh, urutan playlist asli dipertahankan. */
+    private fun downloadedState(dc: DownloadedCollection): CollectionState {
+        val done = container.downloads.entries.value.filter { it.done }.map { it.song.videoId }.toSet()
+        val songs = dc.songs.filter { it.videoId in done }
+        return if (songs.isEmpty()) CollectionState.Error(t("Belum ada lagu yang selesai diunduh"))
+        else CollectionState.Loaded(songs, dc.info)
+    }
+
+    private fun refreshDownloadedCollection() {
+        val key = downloadedKey ?: return
+        val dc = container.downloads.collections.value.firstOrNull { it.ref.key == key }
+        if (dc == null) {
+            // Paket dihapus saat halamannya terbuka.
+            closeCollection()
+            return
+        }
+        _collection.value = downloadedState(dc)
+    }
+
+    fun retryCollection() {
+        val key = downloadedKey
+        if (key != null) {
+            refreshDownloadedCollection()
+            return
+        }
+        _openCollection.value?.let { loadCollection(it) }
+    }
+
+    private fun loadCollection(ref: CollectionRef) {
+        collectionJob?.cancel()
+        collectionCache[ref.key]?.let {
+            _collection.value = CollectionState.Loaded(it.songs, it.info, it.playlists)
+            return
+        }
+        _collection.value = CollectionState.Loading
+        collectionJob = viewModelScope.launch {
+            _collection.value = try {
+                val data = innerTube.loadCollection(ref)
+                if (data.songs.isEmpty()) {
+                    CollectionState.Error(t("Tidak ada lagu di sini"))
+                } else {
+                    collectionCache[ref.key] = data
+                    CollectionState.Loaded(data.songs, data.info, data.playlists)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                CollectionState.Error(e.userMessage("Gagal memuat"))
+            }
+        }
+    }
+
+    fun closeCollection() {
+        collectionJob?.cancel()
+        downloadedKey = null
+        val parent = moodParent
+        moodParent = null
+        if (parent != null) {
+            // Dari playlist di halaman genre: kembali ke genre itu (isinya sudah tersimpan di cache).
+            _openCollection.value = parent
+            loadCollection(parent)
+            return
+        }
+        _openCollection.value = null
+    }
+
+    // --------------------------------------------------------------- library
+    val liked: StateFlow<List<SongItem>> =
+        repo.liked.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    val history: StateFlow<List<SongItem>> =
+        repo.history.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** Lagu yang paling sering diputar (urut dari jumlah putar terbanyak). */
+    val mostPlayed: StateFlow<List<SongItem>> =
+        repo.mostPlayed.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    val currentLiked: StateFlow<Boolean> = player
+        .map { it.current?.videoId }
+        .distinctUntilChanged()
+        .flatMapLatest { id -> if (id == null) flowOf(false) else repo.isLiked(id) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
+    fun isLiked(videoId: String): kotlinx.coroutines.flow.Flow<Boolean> = repo.isLiked(videoId)
+
+    fun clearHistory() {
+        viewModelScope.launch { repo.clearHistory() }
+    }
+
+    /** Hapus satu lagu dari "Terakhir diputar" (tetap tersimpan kalau sudah disukai). */
+    fun removeFromHistory(song: SongItem) {
+        viewModelScope.launch { repo.removeFromHistory(song.videoId) }
+    }
+
+    fun toggleLike(song: SongItem) {
+        viewModelScope.launch {
+            val nowLiked = repo.toggleLike(song)
+            // Sudah masuk: suka ikut tersimpan di akun YouTube Music (tanpa login tidak melakukan apa-apa).
+            try {
+                container.sync.pushLike(song.videoId, nowLiked)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                reportSyncError(e, t("Belum tersimpan ke YouTube Music, akan dicoba lagi"))
+            }
+        }
+    }
+
+    /** Log putaran sejak [from] (ms), terbaru di depan, untuk halaman Statistik. */
+    fun playRows(from: Long) = repo.plays(from)
+
+    /** Riwayat lengkap beserta waktu putarnya (untuk halaman Riwayat lagu). */
+    val historyEntries: StateFlow<List<HistoryEntry>> =
+        repo.historyEntries.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    // ----------------------------------------------------------------- akun
+    /** null = belum masuk. */
+    val account: StateFlow<AccountInfo?> = container.account.account
+
+    /** Dipanggil setelah login di WebView selesai; [done] menerima true kalau akun berhasil dibaca. */
+    fun completeLogin(cookie: String, done: (Boolean) -> Unit) {
+        viewModelScope.launch {
+            val info = try {
+                innerTube.accountInfo(cookie)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                null
+            }
+            if (info != null) {
+                container.account.save(cookie, info)
+                autoSyncNow()
+            }
+            done(info != null)
+        }
+    }
+
+    /** Pesan singkat untuk Snackbar (mis. sesi habis). */
+    private val _messages = MutableSharedFlow<String>(extraBufferCapacity = 4)
+    val messages: SharedFlow<String> = _messages.asSharedFlow()
+
+    private val _remoteHistory = MutableStateFlow<List<SongItem>?>(null)
+
+    /** "Terakhir dilihat": riwayat akun YouTube Music kalau sudah masuk dan berhasil dimuat, selain itu riwayat lokal. */
+    val recent: StateFlow<List<SongItem>> = combine(history, _remoteHistory, account) { local, remote, acc ->
+        if (acc != null && !remote.isNullOrEmpty()) remote else local
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    // ------------------------------------------------------------- unduhan
+    val downloads: StateFlow<List<DownloadEntry>> = container.downloads.entries
+    val downloadProgress: StateFlow<Map<String, Float>> = container.downloads.progress
+    val downloadFailed: StateFlow<Set<String>> = container.downloads.failed
+
+    fun isDownloaded(videoId: String): kotlinx.coroutines.flow.Flow<Boolean> =
+        container.downloads.entries
+            .map { list -> list.any { it.done && it.song.videoId == videoId } }
+            .distinctUntilChanged()
+
+    fun download(song: SongItem) {
+        if (downloadBlockedByDataSaver()) return
+        container.downloads.enqueue(song)
+        _messages.tryEmit(t("Mengunduh \"%s\"", song.title))
+    }
+
+    /** Unduh semua lagu di [songs] (yang sudah selesai dilewati); antreannya ditangani SongDownloads. */
+    fun downloadAll(songs: List<SongItem>) {
+        if (downloadBlockedByDataSaver()) return
+        val done = container.downloads.entries.value.filter { it.done }.map { it.song.videoId }.toSet()
+        val todo = songs.filter { it.videoId !in done }
+        if (todo.isEmpty()) {
+            _messages.tryEmit(t("Semua lagu sudah diunduh"))
+            return
+        }
+        todo.forEach { container.downloads.enqueue(it) }
+        _messages.tryEmit(t("Mengunduh %d lagu", todo.size))
+    }
+
+    /** Paket playlist / album yang diunduh. */
+    val downloadedCollections: StateFlow<List<DownloadedCollection>> = container.downloads.collections
+
+    /**
+     * Unduh playlist / album sebagai satu paket (satu baris di halaman Diunduh). Jenis lain (artis, genre,
+     * dsb.) tetap diunduh sebagai lagu-lagu biasa.
+     */
+    fun downloadCollection(ref: CollectionRef, info: CollectionInfo, songs: List<SongItem>) {
+        if (downloadBlockedByDataSaver()) return
+        if (ref.kind != CollectionKind.PLAYLIST && ref.kind != CollectionKind.ALBUM) {
+            downloadAll(songs)
+            return
+        }
+        val done = container.downloads.entries.value.filter { it.done }.map { it.song.videoId }.toSet()
+        val remote = songs.filter { !it.isLocal }
+        val existing = container.downloads.collections.value.firstOrNull { it.ref.key == ref.key }
+        if (existing != null && remote.all { it.videoId in done }) {
+            _messages.tryEmit(t("\"%s\" sudah diunduh", ref.title))
+            return
+        }
+        container.downloads.enqueueCollection(ref, info, remote)
+        _messages.tryEmit(t("Mengunduh \"%s\"", ref.title))
+    }
+
+    fun removeCollectionDownload(key: String) = container.downloads.removeCollection(key)
+
+    fun retryCollectionDownload(key: String) = container.downloads.retryCollection(key)
+
+    fun removeDownload(song: SongItem) = container.downloads.removeSong(song.videoId)
+
+    // ------------------------------------------------ cadangan (ekspor / impor)
+    /** Tulis semua data lokal ke file pilihan pengguna. Hasilnya diumumkan lewat [messages]. */
+    fun exportTo(uri: android.net.Uri, onDone: (Boolean) -> Unit = {}) {
+        viewModelScope.launch {
+            var ok = false
+            val msg = try {
+                val data = BackupData(repo.exportAll(), container.searchHistory.items.value, repo.exportPlays())
+                val json = Backup.toJson(data)
+                withContext(Dispatchers.IO) {
+                    val out = getApplication<Application>().contentResolver.openOutputStream(uri, "wt")
+                        ?: throw java.io.IOException(t("File tujuan tidak bisa dibuka"))
+                    out.use { it.write(json.toByteArray(Charsets.UTF_8)) }
+                }
+                ok = true
+                t("Cadangan tersimpan: %d lagu, %d pencarian", data.songs.size, data.searches.size)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                t("Gagal mengekspor: %s", e.userMessage("kesalahan tidak dikenal"))
+            }
+            _messages.tryEmit(msg)
+            onDone(ok)
+        }
+    }
+
+    /** Gabungkan file cadangan ke data lokal. File yang tidak valid ditolak tanpa mengubah apa pun. */
+    fun importFrom(uri: android.net.Uri) {
+        viewModelScope.launch {
+            val msg = try {
+                val text = withContext(Dispatchers.IO) {
+                    val input = getApplication<Application>().contentResolver.openInputStream(uri)
+                        ?: throw java.io.IOException(t("File tidak bisa dibuka"))
+                    input.use { String(it.readBytes(), Charsets.UTF_8) }
+                }
+                val data = Backup.parse(text)
+                repo.mergeImported(data.songs)
+                repo.mergePlays(data.plays)
+                container.searchHistory.mergeIn(data.searches)
+                // Sudah masuk: suka dari cadangan ikut dikirim ke akun (diantre, lalu disinkronkan).
+                if (container.account.cookie() != null) {
+                    data.songs.filter { it.liked }.forEach { container.account.setPending(it.videoId, true) }
+                    autoSyncNow()
+                }
+                t("Berhasil: %d lagu, %d pencarian", data.songs.size, data.searches.size)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: BackupFormatException) {
+                t("Gagal mengimpor: %s", e.userMessage("file tidak bisa dibaca"))
+            } catch (e: Exception) {
+                t("Gagal mengimpor: file tidak bisa dibaca")
+            }
+            _messages.tryEmit(msg)
+        }
+    }
+
+    private fun reportSyncError(e: Exception, fallback: String) {
+        _messages.tryEmit(
+            if (e.isAuthError()) t("Sesi YouTube Music habis, masuk lagi lewat tab Anda") else fallback,
+        )
+    }
+
+    private var syncJob: Job? = null
+
+    /** Sinkron Disukai + riwayat dengan akun. Tanpa login tidak melakukan apa-apa. */
+    fun syncNow() {
+        if (container.account.cookie() == null) return
+        syncJob?.cancel()
+        syncJob = viewModelScope.launch {
+            try {
+                container.sync.syncLikes()
+                _remoteHistory.value = container.sync.fetchHistory()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                reportSyncError(e, t("Gagal sinkron dengan YouTube Music"))
+            }
+        }
+    }
+
+    /** Sinkron otomatis (saat aplikasi dibuka, setelah masuk / impor): hanya kalau toggle-nya menyala. */
+    private fun autoSyncNow() {
+        if (container.account.autoSync.value) syncNow()
+    }
+
+    /** Otomatis sinkronisasi dengan akun (toggle di Pengaturan). */
+    val autoSync: StateFlow<Boolean> = container.account.autoSync
+
+    fun setAutoSync(on: Boolean) {
+        container.account.setAutoSync(on)
+        if (on) {
+            syncNow()
+        } else {
+            // Kembali ke riwayat lokal; riwayat akun baru dimuat lagi lewat sinkronisasi manual.
+            syncJob?.cancel()
+            _remoteHistory.value = null
+        }
+    }
+
+    // ------------------------------------------------------------ tampilan
+    val colorMode: StateFlow<app.tunes.data.ColorMode> = container.appearance.mode
+    val customColor: StateFlow<Int> = container.appearance.custom
+    val uiStyle: StateFlow<app.tunes.data.UiStyle> = container.appearance.style
+    fun setUiStyle(style: app.tunes.data.UiStyle) = container.appearance.setStyle(style)
+    val smoothAnim: StateFlow<Boolean> = container.appearance.smoothAnim
+    val bgThumbnail: StateFlow<Boolean> = container.appearance.bgThumbnail
+    fun setBgThumbnail(enabled: Boolean) = container.appearance.setBgThumbnail(enabled)
+    val playerBgColor: StateFlow<Int?> = container.appearance.playerBg
+    fun setPlayerBgColor(argb: Int?, persist: Boolean) = container.appearance.setPlayerBg(argb, persist)
+    val lyricsBg: StateFlow<Boolean> = container.appearance.lyricsBg
+    fun setLyricsBg(enabled: Boolean) = container.appearance.setLyricsBg(enabled)
+    val lyricsPanelCustom: StateFlow<Boolean> = container.appearance.lyricsPanelCustom
+    fun setLyricsPanelCustom(custom: Boolean) = container.appearance.setLyricsPanelCustom(custom)
+    val lyricsPanelColor: StateFlow<Int> = container.appearance.lyricsPanel
+    fun setLyricsPanelColor(argb: Int, persist: Boolean) = container.appearance.setLyricsPanel(argb, persist)
+    fun resetLyricsPanel() = container.appearance.resetLyricsPanel()
+    val lyricsTextMode: StateFlow<app.tunes.data.ColorMode> = container.appearance.lyricsTextMode
+    fun setLyricsTextMode(mode: app.tunes.data.ColorMode) = container.appearance.setLyricsTextMode(mode)
+    val lyricsTextCustom: StateFlow<Int> = container.appearance.lyricsTextCustom
+    fun setLyricsTextCustom(argb: Int, persist: Boolean) = container.appearance.setLyricsTextCustom(argb, persist)
+    val highRefresh: StateFlow<Boolean> = container.appearance.highRefresh
+    fun setHighRefresh(enabled: Boolean) = container.appearance.setHighRefresh(enabled)
+    val shimmerLevel: StateFlow<app.tunes.data.ShimmerLevel> = container.appearance.shimmer
+    fun setShimmerLevel(level: app.tunes.data.ShimmerLevel) = container.appearance.setShimmer(level)
+    val appFont: StateFlow<app.tunes.data.AppFont> = container.appearance.font
+    fun setAppFont(font: app.tunes.data.AppFont) = container.appearance.setFont(font)
+    val fontWeight: StateFlow<Int> = container.appearance.weight
+    fun setFontWeight(step: Int) = container.appearance.setWeight(step)
+    fun resetFont() = container.appearance.resetFont()
+    fun setSmoothAnim(enabled: Boolean) = container.appearance.setSmoothAnim(enabled)
+    val batterySaver: StateFlow<Boolean> = container.appearance.batterySaver
+    fun setBatterySaver(enabled: Boolean) = container.appearance.setBatterySaver(enabled)
+    fun setColorMode(mode: app.tunes.data.ColorMode) = container.appearance.setMode(mode)
+    fun setCustomColor(argb: Int, persist: Boolean) = container.appearance.setCustom(argb, persist)
+
+    /** Muat ulang riwayat dari akun (dipanggil saat halaman Terakhir dilihat dibuka). */
+    fun refreshRecent() {
+        if (container.account.cookie() == null || !container.account.autoSync.value) return
+        viewModelScope.launch {
+            try {
+                _remoteHistory.value = container.sync.fetchHistory()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // tetap tampilkan yang ada
+            }
+        }
+    }
+
+    fun logout() {
+        syncJob?.cancel()
+        _remoteHistory.value = null
+        container.account.clear()
+        android.webkit.CookieManager.getInstance().removeAllCookies(null)
+    }
+
+    // ------------------------------------------------------------ ekualiser
+    val equalizer: StateFlow<EqState> = container.equalizer.state
+    fun setEqEnabled(enabled: Boolean) = container.equalizer.setEnabled(enabled)
+    fun setEqBand(index: Int, level: Int) = container.equalizer.setBand(index, level)
+    fun resetEq() = container.equalizer.reset()
+
+    // ------------------------------------------------------------ informasi
+    /** Id pesan informasi yang sudah dibuka pengguna. */
+    val infoReadIds: StateFlow<Set<String>> = container.info.readIds
+
+    fun markInfoRead(id: String) = container.info.markRead(id)
+
+    // ---------------------------------------------------------------- lirik
+    private val lyricsRetry = MutableStateFlow(0)
+
+    /** Layanan lirik pilihan pengguna (Otomatis / LRCLIB / Better Lyrics / BiniLyrics). */
+    val lyricsSource: StateFlow<LyricsSource> = container.lyricsSource.source
+
+    fun setLyricsSource(source: LyricsSource) = container.lyricsSource.set(source)
+
+    /** true = layanan punya lirik untuk lagu ini, false = tidak ada, null = gagal dicek (mis. tanpa jaringan). */
+    suspend fun lyricsAvailable(song: SongItem, source: LyricsSource): Boolean? =
+        when (container.lyrics.load(song, source)) {
+            is LyricsState.NotFound -> false
+            is LyricsState.Error, is LyricsState.Loading -> null
+            else -> true
+        }
+
+    /** Lirik lagu yang sedang diputar; baru diunduh saat ada yang mengoleksi (layar lirik terbuka). */
+    val lyrics: StateFlow<LyricsState> = combine(
+        player.map { it.current }.distinctUntilChanged { a, b -> a?.videoId == b?.videoId },
+        lyricsRetry,
+        lyricsSource,
+    ) { song, _, source -> song to source }
+        .flatMapLatest { (song, source) ->
+            if (song == null) {
+                flowOf<LyricsState>(LyricsState.NotFound)
+            } else {
+                flow<LyricsState> {
+                    val cached = container.lyrics.cached(song.videoId, source)
+                    if (cached != null) {
+                        emit(cached)
+                    } else {
+                        emit(LyricsState.Loading)
+                        emit(container.lyrics.load(song, source))
+                    }
+                }
+            }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(60_000), LyricsState.Loading)
+
+    fun retryLyrics() {
+        lyricsRetry.value += 1
+    }
+
+    /** Muat ulang lirik lagu ini dari jaringan (cache dibuang; layar menampilkan skeleton dulu). */
+    fun refreshLyrics() {
+        val song = player.value.current ?: return
+        val source = lyricsSource.value
+        viewModelScope.launch(Dispatchers.IO) {
+            container.lyrics.invalidate(song.videoId, source)
+            lyricsRetry.value += 1
+        }
+    }
+
+    // ------------------------------------------------ pengaturan & terjemahan lirik
+    val lyricsFollowLine: StateFlow<Boolean> = container.lyricsPrefs.followLine
+    val lyricsTranslate: StateFlow<Boolean> = container.lyricsPrefs.translate
+    val lyricsTargetLang: StateFlow<String> = container.lyricsPrefs.target
+
+    /** Putar otomatis: antrean streaming habis -> lanjut ke lagu serupa (radio). */
+    val autoplay: StateFlow<Boolean> = container.playbackPrefs.autoplay
+    fun setAutoplay(on: Boolean) = container.playbackPrefs.setAutoplay(on)
+
+    /** Hemat data: kualitas audio Rendah, tanpa Putar otomatis & terjemahan lirik, unduh hanya lewat Wi-Fi. */
+    val dataSaver: StateFlow<Boolean> = container.playbackPrefs.dataSaver
+    fun setDataSaver(on: Boolean) = container.playbackPrefs.setDataSaver(on)
+
+    /** true (dan memberi tahu pengguna) kalau Hemat data aktif dan perangkat memakai data seluler / berkuota. */
+    private fun downloadBlockedByDataSaver(): Boolean {
+        if (!container.playbackPrefs.dataSaver.value) return false
+        val metered = try {
+            val cm = getApplication<Application>().getSystemService(android.content.Context.CONNECTIVITY_SERVICE)
+                as android.net.ConnectivityManager
+            cm.isActiveNetworkMetered
+        } catch (e: Exception) {
+            false
+        }
+        if (metered) _messages.tryEmit(t("Hemat data aktif: unduhan hanya lewat Wi-Fi"))
+        return metered
+    }
+
+    /** Lanjutkan terakhir diputar: antrean & posisi lagu dipulihkan saat aplikasi dibuka lagi. */
+    val resumeLast: StateFlow<Boolean> = container.playbackPrefs.resumeLast
+    fun setResumeLast(on: Boolean) = container.playbackPrefs.setResumeLast(on)
+
+    /** Lewati bagian hening di dalam lagu (bawaan mati). */
+    val skipSilence: StateFlow<Boolean> = container.playbackPrefs.skipSilence
+    fun setSkipSilence(on: Boolean) = container.playbackPrefs.setSkipSilence(on)
+
+    /** Normalisasi volume: lagu yang terlalu keras diturunkan supaya kerasnya seragam (bawaan nyala). */
+    val normalizeVolume: StateFlow<Boolean> = container.playbackPrefs.normalize
+    fun setNormalizeVolume(on: Boolean) = container.playbackPrefs.setNormalize(on)
+
+    val keepScreenAwake: StateFlow<Boolean> = container.lyricsPrefs.keepAwake
+    fun setKeepScreenAwake(on: Boolean) = container.lyricsPrefs.setKeepAwake(on)
+    fun setLyricsFollowLine(on: Boolean) = container.lyricsPrefs.setFollowLine(on)
+
+    // ---------------------------------------------------------- Dynamic Island
+    val islandEnabled: StateFlow<Boolean> = container.islandPrefs.enabled
+    fun setIslandEnabled(on: Boolean) = container.islandPrefs.setEnabled(on)
+    val islandStyle: StateFlow<app.tunes.data.IslandStyle> = container.islandPrefs.style
+    fun setIslandStyle(style: app.tunes.data.IslandStyle) = container.islandPrefs.setStyle(style)
+    val islandColor: StateFlow<app.tunes.data.IslandColor> = container.islandPrefs.color
+    fun setIslandColor(c: app.tunes.data.IslandColor) = container.islandPrefs.setColor(c)
+    val islandCustomColor: StateFlow<Int> = container.islandPrefs.custom
+    fun setIslandCustomColor(argb: Int, persist: Boolean) = container.islandPrefs.setCustom(argb, persist)
+    val islandShape: StateFlow<app.tunes.data.IslandShape> = container.islandPrefs.shape
+    fun setIslandShape(s: app.tunes.data.IslandShape) = container.islandPrefs.setShape(s)
+    val islandCardWidth: StateFlow<Float> = container.islandPrefs.cardWidth
+    fun setIslandCardWidth(v: Float, persist: Boolean) = container.islandPrefs.setCardWidth(v, persist)
+    val islandTextScale: StateFlow<Float> = container.islandPrefs.textScale
+    fun setIslandTextScale(v: Float, persist: Boolean) = container.islandPrefs.setTextScale(v, persist)
+    val islandButtonStyle: StateFlow<app.tunes.data.IslandButtonStyle> = container.islandPrefs.buttonStyle
+    fun setIslandButtonStyle(s: app.tunes.data.IslandButtonStyle) = container.islandPrefs.setButtonStyle(s)
+    val islandShowButtons: StateFlow<Boolean> = container.islandPrefs.showButtons
+    fun setIslandShowButtons(on: Boolean) = container.islandPrefs.setShowButtons(on)
+    val islandShowArtist: StateFlow<Boolean> = container.islandPrefs.showArtist
+    fun setIslandShowArtist(on: Boolean) = container.islandPrefs.setShowArtist(on)
+    val islandShowTitle: StateFlow<Boolean> = container.islandPrefs.showTitle
+    fun setIslandShowTitle(on: Boolean) = container.islandPrefs.setShowTitle(on)
+    val islandOnlyWhenPlaying: StateFlow<Boolean> = container.islandPrefs.onlyWhenPlaying
+    fun setIslandOnlyWhenPlaying(on: Boolean) = container.islandPrefs.setOnlyWhenPlaying(on)
+    val islandPauseHideSec: StateFlow<Float> = container.islandPrefs.pauseHideSec
+    fun setIslandPauseHideSec(v: Float, persist: Boolean) = container.islandPrefs.setPauseHideSec(v, persist)
+    val islandCollapseSec: StateFlow<Float> = container.islandPrefs.collapseSec
+    fun setIslandCollapseSec(v: Float, persist: Boolean) = container.islandPrefs.setCollapseSec(v, persist)
+    val islandCorner: StateFlow<Float> = container.islandPrefs.corner
+    fun setIslandCorner(v: Float, persist: Boolean) = container.islandPrefs.setCorner(v, persist)
+    val islandOpacity: StateFlow<Float> = container.islandPrefs.opacity
+    fun setIslandOpacity(v: Float, persist: Boolean) = container.islandPrefs.setOpacity(v, persist)
+
+    // ------------------------------------------------------------ kualitas audio
+    val audioQuality: StateFlow<app.tunes.data.AudioQuality> = container.playbackPrefs.quality
+    fun setAudioQuality(q: app.tunes.data.AudioQuality) = container.playbackPrefs.setQuality(q)
+
+    // ------------------------------------------------------------ timer tidur
+    val sleepTimer: StateFlow<app.tunes.data.SleepTimerState> = container.sleepTimer.state
+    fun setSleepTimerMinutes(minutes: Int) = container.sleepTimer.startMinutes(minutes)
+    fun setSleepTimerUntilTrackEnd() = container.sleepTimer.startUntilTrackEnd()
+    fun cancelSleepTimer() = container.sleepTimer.cancel()
+
+    fun setLyricsTranslate(on: Boolean) = container.lyricsPrefs.setTranslate(on)
+    fun setLyricsTargetLang(code: String) = container.lyricsPrefs.setTarget(code)
+
+    private val translateRetry = MutableStateFlow(0)
+    fun retryTranslation() {
+        translateRetry.value += 1
+    }
+
+    val lyricsTranslation: StateFlow<TranslationState> = combine(
+        lyrics, lyricsTranslate, lyricsTargetLang, translateRetry, dataSaver,
+    ) { ly, on, lang, _, saver -> Triple(ly, on && !saver, lang) }
+        .flatMapLatest { (ly, on, lang) ->
+            if (!on || ly !is LyricsState.Ready) {
+                flowOf<TranslationState>(TranslationState.Off)
+            } else {
+                flow<TranslationState> {
+                    emit(TranslationState.Loading)
+                    try {
+                        emit(TranslationState.Done(container.translations.translate(ly.lines.map { it.text }, lang)))
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        emit(TranslationState.Error)
+                    }
+                }
+            }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(60_000), TranslationState.Off)
+
+    /** Posisi putar terkini (ms), dipanggil dari UI di main thread. */
+    fun positionNow(): Long = connection.positionNow()
+
+    // -------------------------------------------------------------- playback
+    /** Putar satu lagu, lalu sambung dengan "radio" YouTube Music sebagai antrean otomatis. */
+    fun playSong(song: SongItem) {
+        app.tunes.data.PlayContext.current = null
+        connection.play(listOf(song), 0)
+        if (song.isLocal) return
+        viewModelScope.launch {
+            val radio = try {
+                innerTube.radio(song.videoId).filter { it.videoId != song.videoId }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                emptyList()
+            }
+            // Hanya tambahkan kalau user belum pindah lagu / mengubah antrean.
+            if (radio.isNotEmpty() && connection.currentMediaId() == song.videoId && connection.queueSize() == 1) {
+                connection.append(radio)
+            }
+        }
+    }
+
+    fun playList(songs: List<SongItem>, index: Int) {
+        // Putaran dari halaman album / playlist dicatat bersama koleksinya (untuk statistik album & playlist).
+        app.tunes.data.PlayContext.current = _openCollection.value
+            ?.takeIf { it.kind == CollectionKind.ALBUM || it.kind == CollectionKind.PLAYLIST }
+        connection.play(songs, index)
+    }
+    fun playNext(song: SongItem) = connection.playNext(song)
+    fun addToQueue(song: SongItem) = connection.append(listOf(song))
+    fun addAllToQueue(songs: List<SongItem>) = connection.append(songs)
+
+    fun togglePlay() = connection.togglePlay()
+    fun next() = connection.next()
+    fun previous() = connection.previous()
+    fun previousItem() = connection.previousItem()
+    fun seekTo(ms: Long) = connection.seekTo(ms)
+    fun skipTo(index: Int) = connection.skipTo(index)
+    fun toggleShuffle() = connection.toggleShuffle()
+    fun cycleRepeat() = connection.cycleRepeat()
+
+    // Harus paling akhir: semua properti di atas sudah terinisialisasi.
+    init {
+        loadQuickPicks()
+        loadTrending()
+        loadGenres()
+        autoSyncNow()
+        container.downloads.resumePending()
+        // Halaman paket unduhan yang sedang terbuka ikut diperbarui saat lagunya selesai diunduh / dihapus.
+        viewModelScope.launch {
+            combine(container.downloads.entries, container.downloads.collections) { _, _ -> }
+                .collect { refreshDownloadedCollection() }
+        }
+    }
+
+    override fun onCleared() {
+        connection.release()
+        super.onCleared()
+    }
+}

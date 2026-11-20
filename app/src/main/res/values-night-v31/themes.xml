@@ -1,0 +1,8 @@
+<resources>
+    <style name="Theme.Olyuno" parent="android:Theme.Material.NoActionBar">
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <!-- Splash sistem Android 12+ berlatar putih, lalu menyambung ke animasi logo di LaunchSplash. -->
+        <item name="android:windowSplashScreenBackground">@color/splash_background</item>
+    </style>
+</resources>
