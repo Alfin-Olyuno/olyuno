@@ -466,12 +466,31 @@ suspend fun InnerTube.loadCollection(ref: CollectionRef): CollectionData {
         CollectionKind.QUERY -> CollectionData(querySongs(ref.query ?: ref.title))
         CollectionKind.GENRE -> CollectionData(genreSongs(ref))
         CollectionKind.MOOD -> moodData(ref)
+        // Artis dari statistik (mis. "Andalanmu") hanya punya nama: cari halaman artis aslinya dulu.
+        // Kalau tidak ketemu yang namanya sama persis, cadangannya lagu-lagu hasil pencarian nama itu.
+        CollectionKind.ARTIST -> if (ref.browseId != null) {
+            collectionData(ref)
+        } else {
+            resolveArtist(ref.title)
+                ?.let { collectionData(it.copy(title = ref.title, thumbnail = it.thumbnail ?: ref.thumbnail)) }
+                ?: CollectionData(querySongs(ref.title))
+        }
         else -> collectionData(ref)
     }
     // Halaman kosong (mis. genre tanpa lagu langsung): cadangan lewat pencarian judulnya.
     val songs = data.songs.ifEmpty { if (ref.kind == CollectionKind.QUERY || ref.kind == CollectionKind.MOOD) data.songs else querySongs(ref.title) }
         .take(MAX_COLLECTION_SONGS)
     return data.copy(songs = songs)
+}
+
+/** Cari halaman artis YouTube Music untuk [name]; hanya yang namanya sama persis (tanpa beda huruf besar/kecil). */
+private suspend fun InnerTube.resolveArtist(name: String): CollectionRef? {
+    val q = name.trim()
+    val r = searchAll(q)
+    val fromTop = r.top.filterIsInstance<SearchHit.Entity>().map { it.ref }
+    return (fromTop + r.artists)
+        .filter { it.kind == CollectionKind.ARTIST }
+        .firstOrNull { it.title.trim().equals(q, ignoreCase = true) }
 }
 
 private suspend fun InnerTube.querySongs(q: String): List<SongItem> {

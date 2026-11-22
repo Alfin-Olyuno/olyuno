@@ -64,13 +64,14 @@ fun SongListScreen(
     }
 }
 
-/** Halaman tab Koleksi: judul, lalu daftar menu polos (Terakhir dilihat, Disukai, Diunduh, Lagu perangkat). */
+/** Halaman tab Koleksi: judul, lalu daftar menu polos (Terakhir dilihat, Disukai, Playlist saya, Diunduh, Lagu perangkat). */
 @Composable
 fun CollectionHomeScreen(
     onOpenRecent: () -> Unit,
     onOpenLiked: () -> Unit,
     onOpenDownloads: () -> Unit,
     onOpenDeviceSongs: () -> Unit,
+    onOpenPlaylists: () -> Unit,
 ) {
     androidx.compose.foundation.layout.Column(Modifier.fillMaxSize().padding(top = LocalTabTopInset.current)) {
         Text(
@@ -82,6 +83,7 @@ fun CollectionHomeScreen(
         androidx.compose.foundation.layout.Column(Modifier.padding(top = 8.dp)) {
             MenuItem(androidx.compose.material.icons.Icons.Rounded.History, t("Terakhir dilihat"), onOpenRecent)
             MenuItem(androidx.compose.material.icons.Icons.Rounded.Favorite, t("Disukai"), onOpenLiked)
+            MenuItem(androidx.compose.material.icons.Icons.Rounded.QueueMusic, t("Playlist saya"), onOpenPlaylists)
             MenuItem(androidx.compose.material.icons.Icons.Rounded.Download, t("Diunduh"), onOpenDownloads)
             MenuItem(androidx.compose.material.icons.Icons.Rounded.PhoneAndroid, t("Lagu perangkat"), onOpenDeviceSongs)
         }
@@ -133,19 +135,14 @@ fun SongListPage(
     onOpenPlayer: () -> Unit,
 ) {
     PageBackHandler(onBack = onBack)
+    val search = rememberListSearch()
+    ListSearchBackHandler(search)
+    val shown = remember(songs, search.query) { songs.filterBySearch(search.query) }
     val bars = rememberBarsCollapse(countUnconsumed = true)
     PageSurface {
         MiniPlayerScaffold(
             topBar = {
-                androidx.compose.material3.TopAppBar(
-                    colors = translucentBarColors(),
-                    title = { Text(title) },
-                    navigationIcon = {
-                        androidx.compose.material3.IconButton(onClick = onBack) {
-                            Icon(androidx.compose.material.icons.Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = t("Kembali"))
-                        }
-                    },
-                )
+                SearchableTopBar(title = title, onBack = onBack, search = search, canSearch = songs.isNotEmpty())
             },
             bars = bars,
             vm = vm,
@@ -154,17 +151,19 @@ fun SongListPage(
         ) {
                 if (songs.isEmpty()) {
                     CenterMessage(emptyText)
+                } else if (shown.isEmpty()) {
+                    CenterMessage(t("Tidak ada hasil"))
                 } else {
                     LazyColumn(
                         Modifier.fillMaxSize(),
                         contentPadding = androidx.compose.foundation.layout.PaddingValues(top = LocalTopInset.current, bottom = LocalBottomInset.current),
                     ) {
-                        itemsIndexed(songs, key = { _, s -> s.videoId }) { index, song ->
+                        itemsIndexed(shown, key = { _, s -> s.videoId }) { index, song ->
                             SongRow(
                                 modifier = smoothItem(),
                                 song = song,
                                 isCurrent = song.videoId == currentId,
-                                onClick = { vm.playList(songs, index) },
+                                onClick = { vm.playList(shown, index) },
                                 menu = { dismiss -> SongMenu(vm, song, dismiss) },
                             )
                         }

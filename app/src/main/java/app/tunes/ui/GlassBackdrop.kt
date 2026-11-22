@@ -68,11 +68,16 @@ fun Modifier.glassSource(backdrop: GlassBackdrop): Modifier = this
  * Dipakai hanya kalau [GlassConfig.enabled]; selain itu pemanggil memakai warna solid biasa.
  */
 @Composable
-fun Modifier.glass(shape: Shape, tint: Color, config: GlassConfig = LocalGlass.current): Modifier {
+fun Modifier.glass(
+    shape: Shape,
+    tint: Color,
+    config: GlassConfig = LocalGlass.current,
+    minAlpha: Float = GLASS_ALPHA,
+): Modifier {
     if (!config.enabled) return this
     val backdrop = config.backdrop
     val canBlur = backdrop != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
-    val blurPx = with(LocalDensity.current) { 24.dp.toPx() }
+    val blurPx = with(LocalDensity.current) { 32.dp.toPx() }
     val blurLayer = rememberGraphicsLayer()
     remember(blurLayer, blurPx) {
         blurLayer.renderEffect = BlurEffect(blurPx, blurPx, TileMode.Clamp)
@@ -80,7 +85,9 @@ fun Modifier.glass(shape: Shape, tint: Color, config: GlassConfig = LocalGlass.c
     val pageBg = MaterialTheme.colorScheme.background
     val pageTint = LocalTopTint.current
     var pos by remember { mutableStateOf(Offset.Zero) }
-    val overlay = if (canBlur) tint else tint.copy(alpha = (tint.alpha + 0.35f).coerceAtMost(0.96f))
+    // Kaca pekat: lapisan selalu minimal GLASS_ALPHA supaya gambar di belakang tidak tampak (tidak ada bercak sampul).
+    // Tanpa blur (Android < 12 / tanpa latar) tetap pekat supaya isi di belakang tidak terlihat tajam.
+    val overlay = tint.copy(alpha = maxOf(tint.alpha, if (canBlur) minAlpha else GLASS_ALPHA))
 
     return this
         .clip(shape)

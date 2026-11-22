@@ -16,6 +16,10 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.Bedtime
+import androidx.compose.material.icons.rounded.Headphones
+import androidx.compose.material.icons.rounded.Speed
+import androidx.compose.material.icons.rounded.VolumeDown
+import androidx.compose.material.icons.rounded.Wifi
 import androidx.compose.material.icons.rounded.FastForward
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.DataSaverOn
@@ -61,6 +65,12 @@ fun PlaybackSettingsPage(
     val quality by vm.audioQuality.collectAsStateWithLifecycle()
     val dataSaver by vm.dataSaver.collectAsStateWithLifecycle()
     var showDataSaver by rememberSaveable { mutableStateOf(false) }
+    val speed by vm.playbackSpeed.collectAsStateWithLifecycle()
+    val resumeOnHeadset by vm.resumeOnHeadset.collectAsStateWithLifecycle()
+    val keepPitch by vm.keepPitch.collectAsStateWithLifecycle()
+    val sleepFade by vm.sleepFade.collectAsStateWithLifecycle()
+    val wifiOnly by vm.wifiOnlyDownloads.collectAsStateWithLifecycle()
+    var showSpeed by rememberSaveable { mutableStateOf(false) }
     var showQuality by rememberSaveable { mutableStateOf(false) }
     var showSleep by rememberSaveable { mutableStateOf(false) }
     SubPage(title = t("Pemutaran"), vm = vm, player = player, onBack = onBack, onOpenPlayer = onOpenPlayer) {
@@ -108,6 +118,14 @@ fun PlaybackSettingsPage(
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
+                MenuDivider()
+                SwitchMenuRow(
+                    leading = { Icon(Icons.Rounded.VolumeDown, contentDescription = null, modifier = Modifier.size(24.dp)) },
+                    label = t("Pudarkan volume saat timer habis"),
+                    description = t("Volume turun perlahan beberapa detik sebelum musik berhenti."),
+                    checked = sleepFade,
+                    onChange = vm::setSleepFade,
+                )
             }
             // Audio: kartu terpisah (beda jenis dengan Putar otomatis dan Timer tidur).
             SectionTitle(t("Audio"))
@@ -134,6 +152,16 @@ fun PlaybackSettingsPage(
                     onChange = { on -> if (on) showDataSaver = true else vm.setDataSaver(false) },
                 )
                 MenuDivider()
+                // Unduh hanya Wi-Fi: terkunci nyala selama Hemat data aktif (Hemat data sudah mewajibkannya).
+                SwitchMenuRow(
+                    leading = { Icon(Icons.Rounded.Wifi, contentDescription = null, modifier = Modifier.size(24.dp)) },
+                    label = t("Unduh hanya lewat Wi-Fi"),
+                    description = if (dataSaver) t("Dikunci nyala oleh Hemat data") else t("Unduhan tidak memakai data seluler atau jaringan berkuota."),
+                    checked = wifiOnly || dataSaver,
+                    onChange = { on -> if (!dataSaver) vm.setWifiOnlyDownloads(on) },
+                    dimmed = dataSaver,
+                )
+                MenuDivider()
                 // Kualitas audio: diketuk membuka modal pilihan (Otomatis / Tinggi / Rendah).
                 // Saat Hemat data nyala, kualitas dikunci Rendah dan baris ini tidak bisa diubah.
                 MenuRow(
@@ -149,6 +177,32 @@ fun PlaybackSettingsPage(
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
+                MenuDivider()
+                MenuRow(
+                    leading = { Icon(Icons.Rounded.Speed, contentDescription = null, modifier = Modifier.size(24.dp)) },
+                    label = t("Kecepatan pemutaran"),
+                    description = if (keepPitch) t("Nada tetap saat kecepatan berubah") else t("Nada ikut berubah"),
+                    onClick = { showSpeed = true },
+                ) {
+                    Text(
+                        speedLabel(speed),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodyLarge,
+                    )
+                    Icon(
+                        Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                MenuDivider()
+                SwitchMenuRow(
+                    leading = { Icon(Icons.Rounded.Headphones, contentDescription = null, modifier = Modifier.size(24.dp)) },
+                    label = t("Lanjut saat headset tersambung"),
+                    description = t("Musik yang berhenti karena headset terputus lanjut sendiri kalau tersambung lagi dalam 10 menit."),
+                    checked = resumeOnHeadset,
+                    onChange = vm::setResumeOnHeadset,
+                )
                 MenuDivider()
                 SwitchMenuRow(
                     leading = { Icon(Icons.Rounded.FastForward, contentDescription = null, modifier = Modifier.size(24.dp)) },
@@ -176,6 +230,16 @@ fun PlaybackSettingsPage(
                 showDataSaver = false
             },
             onDismiss = { showDataSaver = false },
+        )
+    }
+
+    if (showSpeed) {
+        SpeedDialog(
+            speed = speed,
+            keepPitch = keepPitch,
+            onSpeed = vm::setPlaybackSpeed,
+            onKeepPitch = vm::setKeepPitch,
+            onDismiss = { showSpeed = false },
         )
     }
 
@@ -305,6 +369,77 @@ private fun DataSaverDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
         },
         confirmButton = {
             Button(onClick = onConfirm, shape = RoundedCornerShape(50)) { Text(t("Aktifkan")) }
+        },
+    )
+}
+
+
+private val SPEED_OPTIONS = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 1.75f, 2f)
+
+/** "1x", "1.25x", "0.5x". */
+private fun speedLabel(v: Float): String {
+    val r = Math.round(v * 100) / 100f
+    return (if (r % 1f == 0f) r.toInt().toString() else r.toString().trimEnd('0')) + "x"
+}
+
+/** Modal kecepatan pemutaran: pilihan 0.5x-2x + toggle Jaga nada. Berlaku langsung. */
+@Composable
+private fun SpeedDialog(
+    speed: Float,
+    keepPitch: Boolean,
+    onSpeed: (Float) -> Unit,
+    onKeepPitch: (Boolean) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val scheme = MaterialTheme.colorScheme
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        shape = RoundedCornerShape(24.dp),
+        containerColor = glassContainer(scheme.surfaceContainerHigh),
+        title = {
+            DialogDim()
+            Text(t("Kecepatan pemutaran"), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+        },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                SPEED_OPTIONS.forEach { v ->
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clickable { onSpeed(v) }
+                            .heightIn(min = 48.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RadioButton(selected = Math.abs(v - speed) < 0.01f, onClick = { onSpeed(v) })
+                        Text(
+                            if (v == 1f) t("Normal") + " (1x)" else speedLabel(v),
+                            style = MaterialTheme.typography.titleMedium,
+                            modifier = Modifier.padding(start = 8.dp),
+                        )
+                    }
+                }
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp)
+                        .clickable { onKeepPitch(!keepPitch) },
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(t("Jaga nada"), style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            t("Suara tidak jadi cempreng atau berat saat dipercepat atau diperlambat."),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = scheme.onSurfaceVariant,
+                        )
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    Switch(checked = keepPitch, onCheckedChange = onKeepPitch)
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text(t("Tutup")) }
         },
     )
 }

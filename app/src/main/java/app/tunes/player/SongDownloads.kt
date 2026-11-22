@@ -4,6 +4,10 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.cache.CacheWriter
 import androidx.media3.datasource.cache.ContentMetadata
+import android.content.Context
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
 import android.net.Uri
 import app.tunes.data.DownloadEntry
 import app.tunes.data.DownloadStore
@@ -21,6 +25,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -46,6 +51,7 @@ import app.tunes.i18n.t
  */
 @OptIn(UnstableApi::class)
 class SongDownloads(
+    context: Context,
     private val store: DownloadStore,
     private val collectionStore: DownloadedCollectionStore,
     private val thumbDir: File,
@@ -65,10 +71,93 @@ class SongDownloads(
     /** Kemajuan 0..1 untuk unduhan yang sedang berjalan. */
     val progress: StateFlow<Map<String, Float>> = _progress.asStateFlow()
 
+    private val cm = context.applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+    private val netLock = Any()
+    private var offlineJob: Job? = null
+
+    private val _online = MutableStateFlow(checkOnline())
+
+    /** false = tidak ada internet; unduhan yang belum selesai menunggu (dijeda) dan lanjut sendiri saat internet kembali. */
+    val online: StateFlow<Boolean> = _online.asStateFlow()
+
+    /** Unduhan yang dijeda karena tidak ada internet (bukan gagal); dilanjutkan otomatis saat online. */
+    private val _waiting = MutableStateFlow<Set<String>>(emptySet())
+
     private val _failed = MutableStateFlow<Set<String>>(emptySet())
 
     /** Unduhan yang gagal sesi ini (jaringan putus dsb.); bisa diulang. */
     val failed: StateFlow<Set<String>> = _failed.asStateFlow()
+
+    init {
+        try {
+            cm?.registerDefaultNetworkCallback(object : ConnectivityManager.NetworkCallback() {
+                override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
+                    setOnline(caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                        caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED))
+                }
+
+                override fun onLost(network: Network) {
+                    setOnline(false)
+                }
+            })
+        } catch (e: Exception) {
+            // tanpa pemantau jaringan, unduhan tetap jalan seperti biasa (gagal kalau putus)
+        }
+    }
+
+    private fun checkOnline(): Boolean {
+        val mgr = cm ?: return true
+        return try {
+            val net = mgr.activeNetwork ?: return false
+            val caps = mgr.getNetworkCapabilities(net) ?: return false
+            caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+        } catch (e: Exception) {
+            true
+        }
+    }
+
+    /**
+     * Status internet dari sistem. Hilangnya jaringan ditahan sebentar (pindah Wi-Fi <-> seluler sering
+     * putus sekejap) sebelum unduhan dijeda; begitu kembali online, yang dijeda dilanjutkan.
+     */
+    private fun setOnline(on: Boolean) {
+        synchronized(netLock) {
+            if (on) {
+                offlineJob?.cancel()
+                offlineJob = null
+                _online.value = true
+                resumeWaiting()
+            } else if (_online.value && offlineJob?.isActive != true) {
+                offlineJob = scope.launch {
+                    delay(1_500)
+                    synchronized(netLock) {
+                        _online.value = false
+                        pauseRunning()
+                    }
+                }
+            }
+        }
+    }
+
+    /** Jeda semua unduhan yang berjalan / antre; yang sudah tersimpan di cache dilanjutkan dari byte terakhir. */
+    private fun pauseRunning() {
+        jobs.entries.toList().forEach { (id, job) ->
+            if (job.isActive) {
+                _waiting.update { it + id }
+                job.cancel()
+            }
+        }
+    }
+
+    private fun resumeWaiting() {
+        val ids = _waiting.value
+        if (ids.isEmpty()) return
+        ids.forEach { id ->
+            val e = store.get(id) ?: return@forEach
+            if (!e.done && jobs[id]?.isActive != true) start(e.song)
+        }
+    }
 
     /**
      * [standalone] false = lagu ini hanya bagian dari paket playlist/album, jadi tidak tampil sebagai
@@ -192,6 +281,11 @@ class SongDownloads(
         }
     }
 
+    /** Batalkan semua unduhan yang belum selesai (yang sudah selesai tetap). Dipakai tombol "Batal" di notifikasi. */
+    fun cancelPending() {
+        store.items.value.filter { !it.done }.forEach { remove(it.song.videoId) }
+    }
+
     /** Hapus semua unduhan (lagu, paket playlist/album, dan sampulnya); unduhan yang berjalan dibatalkan. */
     fun removeAll() {
         collectionStore.items.value.map { it.ref.key }.forEach { removeCollection(it) }
@@ -201,6 +295,7 @@ class SongDownloads(
     /** Batalkan unduhan yang berjalan (kalau ada) dan hapus lagunya dari penyimpanan. */
     fun remove(videoId: String) {
         val running = jobs.remove(videoId)
+        _waiting.update { it - videoId }
         scope.launch {
             running?.cancelAndJoin()
             try {
@@ -218,13 +313,20 @@ class SongDownloads(
 
     private fun start(song: SongItem) {
         val id = song.videoId
+        if (!_online.value) {
+            // Tidak ada internet: tunggu, jangan dicoba dulu (lanjut otomatis lewat resumeWaiting).
+            _waiting.update { it + id }
+            return
+        }
+        _waiting.update { it - id }
         val job = scope.launch(start = CoroutineStart.LAZY) {
             gate.withPermit { download(song) }
         }
         jobs[id] = job
         job.invokeOnCompletion {
-            jobs.remove(id, job)
-            _progress.update { it - id }
+            val removed = jobs.remove(id, job)
+            // Yang dijeda karena offline mempertahankan persen terakhirnya.
+            if (removed && id !in _waiting.value) _progress.update { it - id }
         }
         job.start()
     }
@@ -232,7 +334,7 @@ class SongDownloads(
     private suspend fun download(song: SongItem) {
         val id = song.videoId
         try {
-            _progress.update { it + (id to 0f) }
+            _progress.update { it + (id to (it[id] ?: 0f)) }
             val c = caches.value
             val dataSource = c.downloadFactory().createDataSource()
             val spec = DataSpec.Builder().setUri("tunes://$id").setKey(id).build()
@@ -265,7 +367,12 @@ class SongDownloads(
         } catch (e: Exception) {
             // Dibatalkan di tengah jalan bisa berwujud IOException: jangan dianggap gagal.
             currentCoroutineContext().ensureActive()
-            _failed.update { it + id }
+            if (!_online.value || !checkOnline()) {
+                // Putus karena internet hilang: dijeda, bukan gagal.
+                _waiting.update { it + id }
+            } else {
+                _failed.update { it + id }
+            }
         }
     }
 }

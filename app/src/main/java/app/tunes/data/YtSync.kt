@@ -2,7 +2,10 @@ package app.tunes.data
 
 import app.tunes.innertube.InnerTube
 import app.tunes.innertube.SongItem
+import app.tunes.innertube.MixPlaylist
 import app.tunes.innertube.fetchHistory
+import app.tunes.innertube.fetchMixPlaylists
+import app.tunes.innertube.fetchMixSongs
 import app.tunes.innertube.fetchLiked
 import app.tunes.innertube.registerPlayback
 import app.tunes.innertube.setLike
@@ -43,6 +46,18 @@ class YtSync(
         } catch (e: Exception) {
             // diabaikan
         }
+    }
+
+    /** Playlist perpustakaan akun untuk "Mix untukmu", atau null kalau belum masuk. */
+    suspend fun fetchMixPlaylists(): List<MixPlaylist>? {
+        val cookie = account.cookie() ?: return null
+        return innerTube.fetchMixPlaylists(cookie)
+    }
+
+    /** Lagu satu Mix asli YouTube Music (butuh login supaya Mix personal sama dengan di aplikasi aslinya), atau null kalau belum masuk. */
+    suspend fun fetchMixSongs(playlistId: String): List<SongItem>? {
+        val cookie = account.cookie() ?: return null
+        return innerTube.fetchMixSongs(cookie, playlistId)
     }
 
     /** Riwayat dari akun, atau null kalau belum masuk. */

@@ -134,6 +134,33 @@ class PlayerConnection(
         }
     }
 
+    /** Pindahkan satu lagu di antrean: [to] = posisi barunya setelah dipindah. Lagu yang sedang diputar tetap terus berbunyi. */
+    fun moveQueueItem(from: Int, to: Int) = withController { c ->
+        val n = c.mediaItemCount
+        if (from in 0 until n && to in 0 until n && from != to) c.moveMediaItem(from, to)
+    }
+
+    /** Jadikan lagu di [index] sebagai berikutnya setelah lagu yang sedang diputar. */
+    fun moveQueueItemNext(index: Int) = withController { c ->
+        val n = c.mediaItemCount
+        val cur = c.currentMediaItemIndex
+        if (index !in 0 until n || cur < 0 || index == cur) return@withController
+        // Dari atas lagu sekarang: setelah dicabut, lagu sekarang bergeser satu ke atas.
+        val to = if (index < cur) cur else cur + 1
+        if (to != index) c.moveMediaItem(index, to.coerceIn(0, n - 1))
+    }
+
+    /** Hapus satu lagu dari antrean (lagu yang sedang diputar tidak bisa dihapus dari sini). */
+    fun removeQueueItem(index: Int) = withController { c ->
+        if (index in 0 until c.mediaItemCount && index != c.currentMediaItemIndex) c.removeMediaItem(index)
+    }
+
+    /** Hapus semua lagu setelah yang sedang diputar. */
+    fun clearUpcoming() = withController { c ->
+        val cur = c.currentMediaItemIndex
+        if (cur >= 0 && cur < c.mediaItemCount - 1) c.removeMediaItems(cur + 1, c.mediaItemCount)
+    }
+
     fun togglePlay() = withController { c ->
         val active = c.playWhenReady &&
             c.playbackState != Player.STATE_IDLE && c.playbackState != Player.STATE_ENDED

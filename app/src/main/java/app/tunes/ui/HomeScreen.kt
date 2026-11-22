@@ -23,9 +23,17 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyHorizontalGrid
 import androidx.compose.foundation.lazy.grid.items as gridItems
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Shuffle
+import androidx.compose.material.icons.automirrored.rounded.ArrowForward
+import androidx.compose.material.icons.rounded.Refresh
+import androidx.lifecycle.compose.LifecycleResumeEffect
+import app.tunes.MixStatus
+import androidx.compose.material.icons.rounded.ThumbUp
+import androidx.compose.ui.graphics.Brush
+import app.tunes.innertube.AccountInfo
+import app.tunes.innertube.MixPlaylist
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -51,6 +59,7 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import app.tunes.MainViewModel
 import app.tunes.innertube.SongItem
 import kotlinx.coroutines.delay
@@ -58,6 +67,7 @@ import java.util.Calendar
 import androidx.compose.foundation.layout.size
 import androidx.compose.ui.text.style.TextAlign
 import app.tunes.i18n.t
+import app.tunes.data.StatArtist
 
 // ------------------------------------------------------------------ sapaan
 
@@ -78,7 +88,14 @@ private fun greetingFor(nowMs: Long): String {
 private const val QUICK_PICKS_PER_COLUMN = 4
 
 @Composable
-fun HomeScreen(vm: MainViewModel, mostPlayed: List<SongItem>, currentId: String?) {
+fun HomeScreen(
+    vm: MainViewModel,
+    mostPlayed: List<SongItem>,
+    currentId: String?,
+    onOpenLiked: () -> Unit,
+    onOpenLibrary: () -> Unit,
+    onOpenStreak: () -> Unit = {},
+) {
     // Cek ulang tiap menit supaya sapaan ikut berganti saat jam berubah.
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) {
@@ -91,6 +108,19 @@ fun HomeScreen(vm: MainViewModel, mostPlayed: List<SongItem>, currentId: String?
     val quickPicks by vm.quickPicks.collectAsStateWithLifecycle()
     val genres by vm.genres.collectAsStateWithLifecycle()
     val trending by vm.trending.collectAsStateWithLifecycle()
+    val recent by vm.recent.collectAsStateWithLifecycle()
+    val topArtists by vm.topArtists.collectAsStateWithLifecycle()
+    val account by vm.account.collectAsStateWithLifecycle()
+    val mixPlaylists by vm.mixPlaylists.collectAsStateWithLifecycle()
+    val mixStatus by vm.mixStatus.collectAsStateWithLifecycle()
+    val likedSongs by vm.liked.collectAsStateWithLifecycle()
+    val streak by vm.streak.collectAsStateWithLifecycle()
+    // Kembali ke aplikasi / Beranda: Mix dimuat ulang kalau sudah lama atau sebelumnya gagal.
+    LifecycleResumeEffect(account?.name) {
+        vm.refreshMix()
+        vm.refreshStreak()
+        onPauseOrDispose { }
+    }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -105,6 +135,9 @@ fun HomeScreen(vm: MainViewModel, mostPlayed: List<SongItem>, currentId: String?
             )
         }
 
+        // ---- Streak: kartu kecil tepat di bawah sapaan; ketuk membuka halaman detail.
+        item(key = "streak") { StreakHomeCard(streak, onClick = onOpenStreak) }
+
         // ---- Genre cepat: kotak kecil berjejer ke kanan, bisa digeser; ketuk membuka halaman genre.
         item(key = "mood_row") {
             LazyRow(
@@ -118,19 +151,42 @@ fun HomeScreen(vm: MainViewModel, mostPlayed: List<SongItem>, currentId: String?
             }
         }
 
+        // ---- Lanjutkan: lagu yang terakhir diputar, 2 baris tumbuh ke kanan seperti "Sedang trending".
+        // Disembunyikan sepenuhnya kalau belum ada riwayat putar.
+        if (recent.isNotEmpty()) {
+            item(key = "continue_header") { HomeSectionTitle(t("Lanjutkan")) }
+            item(key = "continue_row") {
+                val list = remember(recent) { recent.take(20) }
+                LazyHorizontalGrid(
+                    rows = GridCells.Fixed(2),
+                    modifier = Modifier.fillMaxWidth().height(TRENDING_CARD_HEIGHT * 2 + 8.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    gridItems(list, key = { "c_" + it.videoId }) { song ->
+                        Box(Modifier.width(140.dp)) {
+                            HomeSongCard(
+                                song = song,
+                                isCurrent = song.videoId == currentId,
+                                onClick = { vm.playList(list, list.indexOf(song).coerceAtLeast(0)) },
+                                vm = vm,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
         // ---- Pilihan cepat: kolom isi 4 lagu (atas ke bawah), kolom berikutnya ke kanan; bisa digeser.
         item(key = "quick_header") { HomeSectionTitle(t("Pilihan cepat")) }
         item(key = "quick_row") {
             val picks = quickPicks
             when {
                 picks == null -> QuickPicksSkeleton()
-                picks.isEmpty() -> Text(
-                    text = t("Pilihan cepat belum bisa dimuat. Periksa koneksi internetmu."),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier
-                        .clickable { vm.loadQuickPicks(force = true) }
-                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                picks.isEmpty() -> HomeRetry(
+                    text = t("Pilihan cepat gagal dimuat. Ketuk untuk coba lagi."),
+                    onClick = { vm.loadQuickPicks(force = true) },
                 )
                 else -> {
                     val columns = remember(picks) { picks.take(20).chunked(QUICK_PICKS_PER_COLUMN) }
@@ -152,6 +208,31 @@ fun HomeScreen(vm: MainViewModel, mostPlayed: List<SongItem>, currentId: String?
                                     )
                                 }
                             }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ---- Mix untukmu: hanya kalau sudah masuk akun. Header akun (ketuk = buka Koleksi), lalu kartu persegi
+        // berjejer ke kanan: Disukai dulu, lalu Mix asli YouTube Music, lalu playlist buatan akun (sampul asli).
+        account?.let { acc ->
+            item(key = "mix_header") { MixHeader(acc, onClick = onOpenLibrary) }
+            item(key = "mix_row") {
+                LazyRow(
+                    contentPadding = PaddingValues(horizontal = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    item(key = "mix_liked") { MixLikedCard(likedCount = likedSongs.size, onClick = onOpenLiked) }
+                    items(mixPlaylists, key = { "mix_" + it.ref.key }) { mix ->
+                        MixPlaylistCard(mix, accountName = acc.name, onClick = { vm.openCollection(mix.ref) })
+                    }
+                    // Belum ada isi: kerangka saat memuat, atau kartu "Coba lagi" kalau gagal.
+                    if (mixPlaylists.isEmpty()) {
+                        if (mixStatus == MixStatus.Error) {
+                            item(key = "mix_error") { MixErrorCard(onRetry = vm::retryMix) }
+                        } else if (mixStatus == MixStatus.Loading) {
+                            items(3, key = { "mix_skel_$it" }) { MixSkeletonCard() }
                         }
                     }
                 }
@@ -180,19 +261,36 @@ fun HomeScreen(vm: MainViewModel, mostPlayed: List<SongItem>, currentId: String?
             }
         }
 
+        // ---- Andalanmu: artis yang paling sering kamu putar, avatar bulat berjejer ke kanan.
+        // Ketuk membuka halaman artis itu (foto + lagunya). Disembunyikan sepenuhnya kalau belum ada riwayat putar.
+        if (topArtists.isNotEmpty()) {
+            item(key = "anchor_header") { HomeSectionTitle(t("Andalanmu")) }
+            item(key = "anchor_row") {
+                LazyRow(
+                    contentPadding = PaddingValues(horizontal = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    items(topArtists, key = { "a_" + it.name }) { artist ->
+                        AnchorArtistCard(
+                            artist = artist,
+                            onClick = {
+                                vm.openArtist(artist.name, artist.thumbnail)
+                            },
+                        )
+                    }
+                }
+            }
+        }
+
         // ---- Sedang trending: kartu lagu yang bisa digeser ke kanan, tepat di bawah "Paling sering diputar".
         item(key = "trending_header") { HomeSectionTitle(t("Sedang trending")) }
         item(key = "trending_row") {
             val list = trending
             when {
                 list == null -> TrendingSkeleton()
-                list.isEmpty() -> Text(
-                    text = t("Lagu trending belum bisa dimuat. Ketuk untuk coba lagi."),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier
-                        .clickable { vm.loadTrending(force = true) }
-                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                list.isEmpty() -> HomeRetry(
+                    text = t("Sedang trending gagal dimuat. Ketuk untuk coba lagi."),
+                    onClick = { vm.loadTrending(force = true) },
                 )
                 else -> LazyHorizontalGrid(
                     // 2 baris lagu, tumbuh ke kanan; digeser kalau tidak muat.
@@ -218,16 +316,7 @@ fun HomeScreen(vm: MainViewModel, mostPlayed: List<SongItem>, currentId: String?
 
         // ---- Genre: ketuk untuk membuka halaman penuh berisi daftar lagunya.
         item(key = "genre_header") {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                HomeSectionTitle(t("Genre"))
-                SmoothIconButton(onClick = vm::shuffleGenres, modifier = Modifier.padding(end = 8.dp, top = 12.dp)) {
-                    Icon(Icons.Rounded.Shuffle, contentDescription = t("Acak genre"))
-                }
-            }
+            HomeSectionTitle(t("Genre"))
         }
         item(key = "genre_grid") {
             val list = genres
@@ -264,6 +353,171 @@ private fun HomeSectionTitle(text: String) {
         style = MaterialTheme.typography.titleMedium,
         modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 20.dp, bottom = 8.dp),
     )
+}
+
+private val MIX_CARD_SIZE = 156.dp
+
+/** Header "Mix untukmu": foto akun (atau huruf pertama), label kecil, nama akun tebal, panah di kanan. */
+@Composable
+private fun MixHeader(account: AccountInfo, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(start = 16.dp, end = 16.dp, top = 20.dp, bottom = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (account.photoUrl != null) {
+            Artwork(url = account.photoUrl, modifier = Modifier.size(44.dp), shape = CircleShape)
+        } else {
+            Box(
+                Modifier.size(44.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primaryContainer),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = account.name.take(1).lowercase(),
+                    style = MaterialTheme.typography.titleLarge,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                )
+            }
+        }
+        Column(Modifier.weight(1f).padding(start = 12.dp)) {
+            Text(
+                text = t("Mix untukmu"),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                text = account.name,
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Icon(Icons.AutoMirrored.Rounded.ArrowForward, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
+private fun MixCardText(title: String, subtitle: String) {
+    Text(
+        text = title,
+        style = MaterialTheme.typography.titleSmall.copy(lineHeight = 22.sp),
+        fontWeight = FontWeight.SemiBold,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier.padding(top = 8.dp),
+    )
+    // lineHeight dilonggarkan: bawaan labelMedium (16sp) terlalu rapat untuk font aplikasi, sehingga bagian atas
+    // huruf besar / "p" terpotong saat teks dipangkas (maxLines + ellipsis memotong ke batas barisnya).
+    Text(
+        text = subtitle,
+        style = MaterialTheme.typography.labelMedium.copy(lineHeight = 20.sp),
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier.padding(top = 2.dp),
+    )
+}
+
+/** Kartu "Disukai": gradien ungu ke pink dengan ikon jempol. */
+@Composable
+private fun MixLikedCard(likedCount: Int, onClick: () -> Unit) {
+    Column(Modifier.width(MIX_CARD_SIZE).clip(RoundedCornerShape(16.dp)).clickable(onClick = onClick)) {
+        Box(
+            modifier = Modifier
+                .size(MIX_CARD_SIZE)
+                .clip(RoundedCornerShape(16.dp))
+                .background(Brush.verticalGradient(listOf(Color(0xFF8E6CF7), Color(0xFFFF5FA8)))),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(Icons.Rounded.ThumbUp, contentDescription = null, tint = Color.White, modifier = Modifier.size(72.dp))
+        }
+        MixCardText(t("Disukai"), if (likedCount > 0) t("%d lagu", likedCount) else t("Belum ada lagu"))
+    }
+}
+
+/** Kerangka kartu Mix saat daftar dari YouTube Music masih dimuat. */
+@Composable
+private fun MixSkeletonCard() {
+    ProvideShimmer {
+        Column(Modifier.width(MIX_CARD_SIZE)) {
+            ShimmerBox(Modifier.size(MIX_CARD_SIZE), RoundedCornerShape(16.dp))
+            Spacer(Modifier.height(10.dp))
+            ShimmerBox(Modifier.fillMaxWidth(0.7f).height(14.dp), RoundedCornerShape(7.dp))
+            Spacer(Modifier.height(8.dp))
+            ShimmerBox(Modifier.fillMaxWidth(0.5f).height(12.dp), RoundedCornerShape(6.dp))
+        }
+    }
+}
+
+/** Kartu saat Mix gagal dimuat: ketuk untuk mencoba lagi. */
+@Composable
+private fun MixErrorCard(onRetry: () -> Unit) {
+    Column(Modifier.width(MIX_CARD_SIZE).clip(RoundedCornerShape(16.dp)).clickable(onClick = onRetry)) {
+        Column(
+            modifier = Modifier
+                .size(MIX_CARD_SIZE)
+                .clip(RoundedCornerShape(16.dp))
+                .background(MaterialTheme.colorScheme.surfaceContainerHigh),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Icon(Icons.Rounded.Refresh, contentDescription = null, modifier = Modifier.size(40.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        MixCardText(t("Mix gagal dimuat"), t("Ketuk untuk coba lagi"))
+    }
+}
+
+/** Kartu Mix / playlist akun: sampul asli dari YouTube Music, keterangan aslinya (mis. "Playlist • pinzz • 8 lagu"). */
+@Composable
+private fun MixPlaylistCard(mix: MixPlaylist, accountName: String, onClick: () -> Unit) {
+    Column(Modifier.width(MIX_CARD_SIZE).clip(RoundedCornerShape(16.dp)).clickable(onClick = onClick)) {
+        Artwork(
+            url = mix.ref.thumbnail,
+            modifier = Modifier.size(MIX_CARD_SIZE),
+            shape = RoundedCornerShape(16.dp),
+        )
+        MixCardText(mix.ref.title, mix.ref.subtitle ?: accountName)
+    }
+}
+
+/** Satu artis di "Andalanmu": avatar bulat, nama, dan jumlah putaran. */
+@Composable
+private fun AnchorArtistCard(artist: StatArtist, onClick: () -> Unit) {
+    Column(
+        modifier = Modifier
+            .width(112.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .clickable(onClick = onClick)
+            .padding(start = 8.dp, top = 6.dp, end = 8.dp, bottom = 10.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Artwork(
+            url = artist.thumbnail,
+            modifier = Modifier.fillMaxWidth().aspectRatio(1f),
+            shape = CircleShape,
+        )
+        Spacer(Modifier.height(8.dp))
+        Text(
+            text = artist.name,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,
+            style = MaterialTheme.typography.labelLarge,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Text(
+            text = t("%d kali diputar", artist.count),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
 }
 
 @Composable
@@ -404,5 +658,32 @@ private fun HomeSongCard(
 ) {
             SongMenu(vm, song) { menuOpen = false }
         }
+    }
+}
+
+
+/** Pesan gagal muat di beranda: teks + ikon panah melingkar; seluruh baris bisa diketuk untuk coba lagi. */
+@Composable
+private fun HomeRetry(text: String, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f),
+        )
+        Icon(
+            Icons.Rounded.Refresh,
+            contentDescription = t("Coba lagi"),
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(24.dp),
+        )
     }
 }

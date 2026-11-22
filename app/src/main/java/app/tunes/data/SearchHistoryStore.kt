@@ -8,6 +8,7 @@ import org.json.JSONArray
 
 /**
  * Riwayat kata kunci pencarian: yang terbaru paling depan, tanpa duplikat.
+ * Maksimal 10 entri; kalau lebih, yang paling lama otomatis dihapus.
  * Disimpan di SharedPreferences supaya tidak perlu mengubah skema database lagu.
  */
 class SearchHistoryStore(context: Context) {
@@ -18,7 +19,7 @@ class SearchHistoryStore(context: Context) {
 
     private fun load(): List<String> = try {
         val arr = JSONArray(prefs.getString(KEY, "[]") ?: "[]")
-        List(arr.length()) { arr.getString(it) }
+        List(arr.length()) { arr.getString(it) }.take(MAX)
     } catch (e: Exception) {
         emptyList()
     }
@@ -49,6 +50,6 @@ class SearchHistoryStore(context: Context) {
 
     private companion object {
         const val KEY = "items"
-        const val MAX = 30
+        const val MAX = 10
     }
 }

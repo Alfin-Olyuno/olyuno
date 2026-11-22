@@ -47,6 +47,7 @@ data class SongPalette(
 
 object PaletteExtractor {
     private val cache = LruCache<String, SongPalette>(96)
+    private val blurCache = LruCache<String, Bitmap>(24)
 
     fun peek(url: String?): SongPalette? = url?.let { cache.get(it) }
 
@@ -65,6 +66,65 @@ object PaletteExtractor {
                 ?: return@withContext null
             cache.put(url, palette)
             palette
+        }
+    }
+
+    /**
+     * Sampul yang diburamkan oleh Olyuno sendiri (bukan blur sistem HP): dikecilkan ke 32x32 lalu di-box-blur
+     * beberapa kali. Dipakai gaya Kaca Dynamic Island sebagai isi kaca; bitmap kecil ini diregangkan ke ukuran kartu.
+     */
+    suspend fun loadBlurred(context: Context, url: String?): Bitmap? {
+        if (url == null) return null
+        blurCache.get(url)?.let { return it }
+        return withContext(Dispatchers.IO) {
+            val request = ImageRequest.Builder(context)
+                .data(url)
+                .size(64)
+                .allowHardware(false)
+                .build()
+            val drawable = (context.imageLoader.execute(request) as? SuccessResult)?.drawable
+                ?: return@withContext null
+            val small = runCatching { Bitmap.createScaledBitmap(drawable.toBitmap(), 32, 32, true) }.getOrNull()
+                ?: return@withContext null
+            val out = boxBlur(small, radius = 3, passes = 3)
+            blurCache.put(url, out)
+            out
+        }
+    }
+
+    private fun boxBlur(src: Bitmap, radius: Int, passes: Int): Bitmap {
+        val w = src.width
+        val h = src.height
+        val a = IntArray(w * h)
+        val b = IntArray(w * h)
+        src.getPixels(a, 0, w, 0, 0, w, h)
+        repeat(passes) {
+            blurPass(a, b, w, h, radius, horizontal = true)
+            blurPass(b, a, w, h, radius, horizontal = false)
+        }
+        return Bitmap.createBitmap(a, w, h, Bitmap.Config.ARGB_8888)
+    }
+
+    private fun blurPass(inp: IntArray, out: IntArray, w: Int, h: Int, r: Int, horizontal: Boolean) {
+        val lines = if (horizontal) h else w
+        val len = if (horizontal) w else h
+        for (l in 0 until lines) {
+            for (i in 0 until len) {
+                var sr = 0
+                var sg = 0
+                var sb = 0
+                var n = 0
+                for (k in -r..r) {
+                    val j = (i + k).coerceIn(0, len - 1)
+                    val p = if (horizontal) inp[l * w + j] else inp[j * w + l]
+                    sr += (p shr 16) and 0xFF
+                    sg += (p shr 8) and 0xFF
+                    sb += p and 0xFF
+                    n++
+                }
+                val c = (0xFF shl 24) or ((sr / n) shl 16) or ((sg / n) shl 8) or (sb / n)
+                if (horizontal) out[l * w + i] = c else out[i * w + l] = c
+            }
         }
     }
 

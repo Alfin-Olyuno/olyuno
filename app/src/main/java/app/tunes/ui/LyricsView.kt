@@ -1,5 +1,6 @@
 package app.tunes.ui
 
+import androidx.compose.material.icons.rounded.Refresh
 import android.os.Build
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -137,7 +138,15 @@ fun LyricsView(
                         containerColor = Color.White.copy(alpha = 0.18f),
                         contentColor = Color.White,
                     ),
-                ) { Text("Coba lagi") }
+                ) {
+                    androidx.compose.material3.Icon(
+                        androidx.compose.material.icons.Icons.Rounded.Refresh,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    androidx.compose.foundation.layout.Spacer(Modifier.size(8.dp))
+                    Text(t("Coba lagi"))
+                }
             }
             is LyricsState.Ready ->
                 if (s.synced) SyncedLyrics(s.lines, songKey, isPlaying, positionProvider, onSeek, follow, translations, jump, onJumpHandled)

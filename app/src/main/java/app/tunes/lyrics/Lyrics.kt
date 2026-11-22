@@ -28,7 +28,6 @@ enum class LyricsSource(val key: String, val label: String, val description: Str
     Lrclib("lrclib", "LRCLIB", "Menampilkan lirik per baris"),
     BetterLyrics("better", "Better Lyrics", "Menampilkan lirik per baris"),
     BiniLyrics("bini", "BiniLyrics", "Menampilkan lirik per baris"),
-    Paxsenix("paxsenix", "Paxsenix", "Menampilkan lirik per baris"),
     LyricsPlus("lyricsplus", "Lyrics Plus", "Menampilkan lirik per kata");
 
     companion object {

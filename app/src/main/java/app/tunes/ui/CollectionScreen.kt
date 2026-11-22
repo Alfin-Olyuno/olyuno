@@ -122,13 +122,23 @@ fun CollectionScreen(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.Center,
                     ) {
+                        val isEmptyNotice = state.message == t("Tidak ada lagu di sini") ||
+                            state.message == t("Belum ada lagu yang selesai diunduh")
+                        if (!isEmptyNotice) {
+                            Text(
+                                t("Gagal memuat Koleksi"),
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.padding(horizontal = 32.dp),
+                            )
+                        }
                         Text(
                             state.message,
                             style = MaterialTheme.typography.bodyLarge,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(horizontal = 32.dp),
                         )
-                        TextButton(onClick = vm::retryCollection) { Text("Coba lagi") }
+                        RetryTextButton(onClick = vm::retryCollection)
                     }
 
                     is CollectionState.Loaded -> {
@@ -253,8 +263,16 @@ private fun CollectionHeader(
 ) {
     val bg = MaterialTheme.colorScheme.background
     val thumb = info?.thumbnail ?: ref.thumbnail
+    // Genre / suasana / hasil kata kunci tidak punya gambar sendiri: tanpa hero (blok warna kosong yang besar),
+    // judul langsung di bawah tombol Kembali / Cari. Hero tetap untuk Artis, Album, Playlist, dan Mix.
+    val compact = ref.kind == app.tunes.innertube.CollectionKind.GENRE ||
+        ref.kind == app.tunes.innertube.CollectionKind.MOOD ||
+        ref.kind == app.tunes.innertube.CollectionKind.QUERY
     Column(Modifier.fillMaxWidth()) {
-        Box(Modifier.fillMaxWidth().aspectRatio(if (thumb != null) 1f else 1.7f)) {
+        if (compact) {
+            // Ruang untuk tombol Kembali / Cari yang melayang di atas (44dp + jarak atas dan bawah 8dp) + sedikit napas.
+            Spacer(Modifier.fillMaxWidth().statusBarsPadding().height(68.dp))
+        } else Box(Modifier.fillMaxWidth().aspectRatio(if (thumb != null) 1f else 1.7f)) {
             if (thumb != null) {
                 Artwork(thumb, Modifier.fillMaxSize(), RectangleShape)
             } else {
@@ -270,15 +288,20 @@ private fun CollectionHeader(
         }
 
         Column(
-            modifier = Modifier
-                .layout { measurable, constraints ->
-                    // Tarik ke atas 64dp: tinggi berkurang, posisi naik, sehingga menimpa gambar.
-                    val placeable = measurable.measure(constraints)
-                    val pull = 64.dp.roundToPx()
-                    layout(placeable.width, (placeable.height - pull).coerceAtLeast(0)) {
-                        placeable.placeRelative(0, -pull)
+            modifier = (
+                if (compact) {
+                    Modifier
+                } else {
+                    Modifier.layout { measurable, constraints ->
+                        // Tarik ke atas 64dp: tinggi berkurang, posisi naik, sehingga menimpa gambar.
+                        val placeable = measurable.measure(constraints)
+                        val pull = 64.dp.roundToPx()
+                        layout(placeable.width, (placeable.height - pull).coerceAtLeast(0)) {
+                            placeable.placeRelative(0, -pull)
+                        }
                     }
                 }
+                )
                 .padding(horizontal = 20.dp),
         ) {
             Text(

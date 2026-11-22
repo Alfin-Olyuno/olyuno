@@ -102,6 +102,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.common.Player
 import app.tunes.MainViewModel
 import app.tunes.innertube.SongItem
+import app.tunes.innertube.isLocal
 import app.tunes.player.PlayerState
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
@@ -435,6 +436,7 @@ private fun PlayerPage(
     val normalizeVolume by vm.normalizeVolume.collectAsStateWithLifecycle()
     var showPlayerMenu by remember { mutableStateOf(false) }
     var showSleepSheet by remember { mutableStateOf(false) }
+    var showClearQueue by remember { mutableStateOf(false) }
     // Status unduhan lagu ini untuk tombol "Unduh" di menu Pemutaran.
     val playerContext = LocalContext.current
     val songDownloaded by remember(song.videoId) { vm.isDownloaded(song.videoId) }
@@ -532,6 +534,30 @@ private fun PlayerPage(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.alignByBaseline(),
                 )
+                // Simpan: seluruh antrean jadi playlist (baru atau yang sudah ada).
+                if (state.queue.isNotEmpty()) {
+                    Text(
+                        t("Simpan"),
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier
+                            .alignByBaseline()
+                            .padding(start = 16.dp)
+                            .clickable { vm.openPlaylistPicker(state.queue) },
+                    )
+                }
+                // Bersihkan: hapus semua lagu setelah yang sedang diputar (hanya kalau memang ada).
+                if (state.currentIndex in 0 until state.queue.lastIndex) {
+                    Text(
+                        t("Bersihkan"),
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier
+                            .alignByBaseline()
+                            .padding(start = 16.dp)
+                            .clickable { showClearQueue = true },
+                    )
+                }
             }
         }
 
@@ -541,6 +567,9 @@ private fun PlayerPage(
                 isCurrent = index == state.currentIndex,
                 highlightCurrent = true,
                 onClick = { vm.skipTo(index) },
+                menu = { dismiss ->
+                    QueueMenu(vm, song = s, index = index, current = state.currentIndex, size = state.queue.size, dismiss = dismiss)
+                },
             )
         }
     }
@@ -593,6 +622,17 @@ private fun PlayerPage(
             downloaded = songDownloaded,
             downloadProgress = allDownloadProgress[song.videoId],
             downloadFailed = song.videoId in allDownloadFailed,
+            isLocal = song.isLocal,
+            onStartRadio = {
+                showPlayerMenu = false
+                vm.startRadio(song)
+                // Pesan dari ViewModel tertutup layar pemutar, jadi kabarnya lewat Toast di sini.
+                if (!song.isLocal) Toast.makeText(playerContext, t("Memulai radio dari \"%s\"", song.title), Toast.LENGTH_SHORT).show()
+            },
+            onAddToPlaylist = {
+                showPlayerMenu = false
+                vm.openPlaylistPicker(listOf(song))
+            },
             onDownload = {
                 showPlayerMenu = false
                 vm.download(song)
@@ -602,6 +642,17 @@ private fun PlayerPage(
             normalizeVolume = normalizeVolume,
             onNormalizeVolumeChange = vm::setNormalizeVolume,
             onDismiss = { showPlayerMenu = false },
+        )
+    }
+    if (showClearQueue) {
+        ConfirmDeleteDialog(
+            title = t("Bersihkan antrean?"),
+            message = t("Semua lagu setelah yang sedang diputar akan dihapus dari antrean."),
+            onConfirm = {
+                vm.clearUpcomingQueue()
+                showClearQueue = false
+            },
+            onDismiss = { showClearQueue = false },
         )
     }
     if (showSleepSheet) {
@@ -658,7 +709,6 @@ private fun LyricsPage(
                 app.tunes.lyrics.LyricsSource.BetterLyrics,
                 app.tunes.lyrics.LyricsSource.LyricsPlus,
                 app.tunes.lyrics.LyricsSource.BiniLyrics,
-                app.tunes.lyrics.LyricsSource.Paxsenix,
             ).forEach { src ->
                 launch {
                     vm.lyricsAvailable(song, src)?.let { ok -> availability = availability + (src to ok) }

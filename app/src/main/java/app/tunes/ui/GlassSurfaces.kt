@@ -21,6 +21,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
 
@@ -70,19 +72,38 @@ fun Modifier.modalOption(selected: Boolean, onClick: () -> Unit): Modifier {
 /** Kepekatan gelap latar di belakang dialog (0..1). */
 private const val DIALOG_DIM = 0.5f
 
+/** Kepekatan kaca (0..1). Tinggi = hampir tidak tembus, jadi gambar di belakang bilah tidak terlihat jelas. */
+const val GLASS_ALPHA = 0.92f
+
+/** Kepekatan kaca khusus bilah tab & pemutar mini: sedikit lebih tembus dari [GLASS_ALPHA] (blur Olyuno menjaga isi tetap kabur). */
+const val BAR_GLASS_ALPHA = 0.80f
+
+/** true kalau tema sedang terang (latar terang): kaca dibuat putih. Di tema gelap kaca tetap gelap. */
+@Composable
+fun glassIsLight(): Boolean = MaterialTheme.colorScheme.background.luminance() > 0.5f
+
 /**
- * Warna wadah: [solid] untuk gaya Biasa; gaya Kaca = [solid] yang sedikit tembus ([plainAlpha]).
- * [blurAlpha] dipertahankan hanya demi kompatibilitas pemanggil; tidak dipakai lagi.
+ * Warna dasar kaca: putih di tema terang, [solid] (permukaan gelap tema) di tema gelap.
+ * Dipakai bilah tab, pemutar mini, dan kartu agar semua bagian kaca seragam.
+ */
+@Composable
+fun glassBase(solid: Color): Color = if (glassIsLight()) Color.White else solid
+
+/**
+ * Warna wadah: [solid] untuk gaya Biasa; gaya Kaca = putih (tema terang) / [solid] (tema gelap) yang
+ * hanya sedikit tembus. [blurAlpha] dan [plainAlpha] dipertahankan demi kompatibilitas pemanggil;
+ * kepekatan kaca sekarang selalu [GLASS_ALPHA] ke atas.
  */
 @Composable
 fun glassContainer(solid: Color, blurAlpha: Float = 0.80f, plainAlpha: Float = 0.94f): Color {
     if (!LocalGlass.current.enabled) return solid
-    return solid.copy(alpha = plainAlpha)
+    val base = if (glassIsLight()) lerp(solid, Color.White, 0.75f) else solid
+    return base.copy(alpha = maxOf(plainAlpha, 0.95f))
 }
 
 /** Warna menu titik tiga: sama dengan bawaan Material, atau agak tembus di gaya Kaca. */
 @Composable
-fun glassMenuColor(): Color = glassContainer(MaterialTheme.colorScheme.surfaceContainer, 0.86f, 0.96f)
+fun glassMenuColor(): Color = glassContainer(MaterialTheme.colorScheme.surfaceContainer, 0.86f, 0.97f)
 
 /** Garis tipis di tepi menu / kartu hanya di gaya Kaca (menegaskan tepi kaca); null di gaya Biasa. */
 @Composable

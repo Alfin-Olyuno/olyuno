@@ -32,7 +32,7 @@ data class AudioStream(
 /** Turunan IOException supaya ExoPlayer memperlakukannya sebagai error sumber yang bisa di-retry. */
 class InnerTubeException(message: String, cause: Throwable? = null) : IOException(message, cause)
 
-enum class CollectionKind { ARTIST, ALBUM, PLAYLIST, GENRE, QUERY, MOOD }
+enum class CollectionKind { ARTIST, ALBUM, PLAYLIST, GENRE, QUERY, MOOD, MIX }
 
 /**
  * Rujukan ke satu "koleksi lagu" yang bisa dibuka di halaman penuh: artis, album, playlist, genre,

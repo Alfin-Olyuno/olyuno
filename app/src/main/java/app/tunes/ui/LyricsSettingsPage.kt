@@ -88,7 +88,7 @@ fun LyricsSettingsPage(
         val song = currentSong ?: return@LaunchedEffect
         if (!showSourceSheet) return@LaunchedEffect
         coroutineScope {
-            listOf(LyricsSource.Lrclib, LyricsSource.BetterLyrics, LyricsSource.LyricsPlus, LyricsSource.BiniLyrics, LyricsSource.Paxsenix).forEach { src ->
+            listOf(LyricsSource.Lrclib, LyricsSource.BetterLyrics, LyricsSource.LyricsPlus, LyricsSource.BiniLyrics).forEach { src ->
                 launch {
                     vm.lyricsAvailable(song, src)?.let { ok -> availability = availability + (src to ok) }
                 }

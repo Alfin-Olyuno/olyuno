@@ -43,6 +43,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -66,6 +67,8 @@ import app.tunes.i18n.t
 fun OlyunoRoot(
     openPlayerRequest: Boolean = false,
     onOpenPlayerConsumed: () -> Unit = {},
+    openSearchRequest: Boolean = false,
+    onOpenSearchConsumed: () -> Unit = {},
     vm: MainViewModel = viewModel(),
 ) {
     val player by vm.player.collectAsStateWithLifecycle()
@@ -98,7 +101,10 @@ fun OlyunoRoot(
     var tab by rememberSaveable { mutableIntStateOf(0) }
     // Halaman penuh dari tab Koleksi: -1 tidak ada, 0 Terakhir dilihat, 1 Disukai.
     var libraryPage by rememberSaveable { mutableIntStateOf(-1) }
-    // Halaman penuh dari tab Anda: -1 tidak ada, 0 Ekualiser, 1 Riwayat lagu, 2 Informasi, 3 Pengaturan, 4 Tampilan, 11 Statistik.
+    // libraryPage 4 = daftar Playlist saya, 5 = isi satu playlist (id-nya di sini).
+    var localPlaylistId by rememberSaveable { mutableLongStateOf(-1L) }
+    val localPlaylists by vm.localPlaylists.collectAsStateWithLifecycle()
+    // Halaman penuh dari tab Anda: -1 tidak ada, 0 Ekualiser, 1 Riwayat lagu, 2 Informasi, 3 Pengaturan, 4 Tampilan, 11 Statistik, 14 Streak.
     var andaPage by rememberSaveable { mutableIntStateOf(-1) }
     // Halaman Tentang Olyuno (andaPage == 12) bisa dibuka dari tab Anda atau Pengaturan; ini halaman tujuan saat kembali (-1 atau 3).
     var aboutBackTo by rememberSaveable { mutableIntStateOf(-1) }
@@ -124,6 +130,18 @@ fun OlyunoRoot(
         if (openPlayerRequest && currentId != null) {
             showPlayer = true
             onOpenPlayerConsumed()
+        }
+    }
+    // Pintasan ikon "Cari": tutup halaman yang terbuka, lalu ke tab Cari.
+    LaunchedEffect(openSearchRequest) {
+        if (openSearchRequest) {
+            showPlayer = false
+            libraryPage = -1
+            andaPage = -1
+            showLogin = false
+            vm.closeCollection()
+            tab = 1
+            onOpenSearchConsumed()
         }
     }
     // Permintaan basi (tidak ada lagu) dibuang supaya tidak membuka pemutar belakangan.
@@ -244,13 +262,14 @@ fun OlyunoRoot(
               ) {
                 TabEnter(tab) {
                 when (tab) {
-                    0 -> HomeScreen(vm, mostPlayed, currentId)
+                    0 -> HomeScreen(vm, mostPlayed, currentId, onOpenLiked = { libraryPage = 1 }, onOpenLibrary = { tab = 2 }, onOpenStreak = { andaPage = 14 })
                     1 -> SearchScreen(vm, currentId)
                     2 -> CollectionHomeScreen(
                         onOpenRecent = { libraryPage = 0 },
                         onOpenLiked = { libraryPage = 1 },
                         onOpenDownloads = { libraryPage = 2 },
                         onOpenDeviceSongs = { libraryPage = 3 },
+                        onOpenPlaylists = { libraryPage = 4 },
                     )
                     else -> AndaScreen(
                         account = account,
@@ -264,6 +283,7 @@ fun OlyunoRoot(
                         onOpenEqualizer = { andaPage = 0 },
                         onOpenHistory = { andaPage = 1 },
                         onOpenStats = { andaPage = 11 },
+                        onOpenStreak = { andaPage = 14 },
                         onOpenInfo = { andaPage = 2 },
                         onOpenSettings = { andaPage = 3 },
                         onOpenAbout = {
@@ -277,6 +297,13 @@ fun OlyunoRoot(
               }
             }
             TopScreenBlur(backdrop = backdrop, modifier = Modifier.align(androidx.compose.ui.Alignment.TopCenter))
+            // Tombol muat ulang di atas kanan pemutar mini (hanya Beranda & Cari): turun hilang saat scroll ke bawah, naik lagi saat scroll ke atas.
+            RefreshFab(
+                visible = (tab == 0 || tab == 1) && !barsCollapse.collapsed && !baseCovered,
+                bottomInset = padding.calculateBottomPadding(),
+                onClick = { if (tab == 0) vm.refreshHome() else vm.refreshSearch() },
+                modifier = Modifier.align(androidx.compose.ui.Alignment.BottomEnd),
+            )
             }
         }
         // Penghalang sentuhan: selama halaman penuh terbuka, tab di belakangnya tidak bisa terketuk.
@@ -326,6 +353,32 @@ fun OlyunoRoot(
             )
         }
 
+        PageTransition(visible = libraryPage == 4 || libraryPage == 5, covered = libraryPage == 5 || openCollection != null) {
+            // Daftar tetap ada di belakang isi playlist, jadi "kembali" dari isi memperlihatkannya tanpa memuat ulang.
+            LocalPlaylistsPage(
+                vm = vm,
+                playlists = localPlaylists,
+                player = player,
+                onBack = { libraryPage = -1 },
+                onOpen = {
+                    localPlaylistId = it
+                    libraryPage = 5
+                },
+                onOpenPlayer = { showPlayer = true },
+            )
+        }
+
+        PageTransition(visible = libraryPage == 5, covered = openCollection != null) {
+            LocalPlaylistDetailPage(
+                vm = vm,
+                playlist = localPlaylists.firstOrNull { it.id == localPlaylistId },
+                player = player,
+                currentId = currentId,
+                onBack = { libraryPage = 4 },
+                onOpenPlayer = { showPlayer = true },
+            )
+        }
+
         PageTransition(visible = libraryPage == 3) {
             DeviceSongsPage(
                 vm = vm,
@@ -367,6 +420,16 @@ fun OlyunoRoot(
             )
         }
 
+        // Streak: dibuka dari kartu di Beranda atau menu di tab Anda.
+        PageTransition(visible = andaPage == 14) {
+            StreakPage(
+                vm = vm,
+                player = player,
+                onBack = { andaPage = -1 },
+                onOpenPlayer = { showPlayer = true },
+            )
+        }
+
         PageTransition(visible = andaPage == 2) {
             InfoPage(
                 readIds = infoRead,
@@ -378,7 +441,7 @@ fun OlyunoRoot(
             )
         }
 
-        PageTransition(visible = andaPage in 3..10 || (andaPage == 12 && aboutBackTo == 3), covered = andaPage >= 4) {
+        PageTransition(visible = andaPage in 3..10 || andaPage == 13 || (andaPage == 12 && aboutBackTo == 3), covered = andaPage >= 4) {
             SettingsPage(
                 account = account,
                 autoSync = autoSync,
@@ -389,6 +452,7 @@ fun OlyunoRoot(
                 onOpenPlayback = { andaPage = 8 },
                 onOpenLyrics = { andaPage = 7 },
                 onOpenStorage = { andaPage = 10 },
+                onOpenNotifications = { andaPage = 13 },
                 onOpenAbout = {
                     aboutBackTo = 3
                     andaPage = 12
@@ -456,6 +520,15 @@ fun OlyunoRoot(
             )
         }
 
+        PageTransition(visible = andaPage == 13) {
+            NotificationsPage(
+                vm = vm,
+                player = player,
+                onBack = { andaPage = 3 },
+                onOpenPlayer = { showPlayer = true },
+            )
+        }
+
         PageTransition(visible = andaPage == 7) {
             LyricsSettingsPage(
                 vm = vm,
@@ -505,6 +578,9 @@ fun OlyunoRoot(
                 }
             }
         }
+
+        // Pemilih "Tambah ke playlist" (dibuka dari menu lagu mana pun).
+        PlaylistPickerHost(vm)
 
         if (showLogoutConfirm) {
             AlertDialog(

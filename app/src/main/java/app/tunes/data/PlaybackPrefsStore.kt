@@ -37,6 +37,15 @@ class PlaybackPrefsStore(context: Context) {
         _quality.value = q
     }
 
+    /** Lanjut sendiri saat headset (Bluetooth / kabel) tersambung lagi setelah musik terhenti karena terputus. Bawaan nyala. */
+    private val _resumeOnHeadset = MutableStateFlow(prefs.getBoolean(RESUME_ON_HEADSET, true))
+    val resumeOnHeadset: StateFlow<Boolean> = _resumeOnHeadset.asStateFlow()
+
+    fun setResumeOnHeadset(on: Boolean) {
+        prefs.edit().putBoolean(RESUME_ON_HEADSET, on).apply()
+        _resumeOnHeadset.value = on
+    }
+
     /** Lewati bagian hening: bawaan mati. */
     private val _skipSilence = MutableStateFlow(prefs.getBoolean(SKIP_SILENCE, false))
     val skipSilence: StateFlow<Boolean> = _skipSilence.asStateFlow()
@@ -65,6 +74,43 @@ class PlaybackPrefsStore(context: Context) {
     fun setDataSaver(on: Boolean) {
         prefs.edit().putBoolean(DATA_SAVER, on).apply()
         _dataSaver.value = on
+    }
+
+    /** Kecepatan pemutaran (0.5x-2x), bawaan 1x. */
+    private val _speed = MutableStateFlow(prefs.getFloat(SPEED, 1f).coerceIn(MIN_SPEED, MAX_SPEED))
+    val speed: StateFlow<Float> = _speed.asStateFlow()
+
+    fun setSpeed(v: Float) {
+        val x = v.coerceIn(MIN_SPEED, MAX_SPEED)
+        prefs.edit().putFloat(SPEED, x).apply()
+        _speed.value = x
+    }
+
+    /** Jaga nada: nyala = nada tetap saat kecepatan diubah; mati = nada ikut berubah. Bawaan nyala. */
+    private val _keepPitch = MutableStateFlow(prefs.getBoolean(KEEP_PITCH, true))
+    val keepPitch: StateFlow<Boolean> = _keepPitch.asStateFlow()
+
+    fun setKeepPitch(on: Boolean) {
+        prefs.edit().putBoolean(KEEP_PITCH, on).apply()
+        _keepPitch.value = on
+    }
+
+    /** Timer tidur: volume dipudarkan perlahan sebelum jeda. Bawaan nyala. */
+    private val _sleepFade = MutableStateFlow(prefs.getBoolean(SLEEP_FADE, true))
+    val sleepFade: StateFlow<Boolean> = _sleepFade.asStateFlow()
+
+    fun setSleepFade(on: Boolean) {
+        prefs.edit().putBoolean(SLEEP_FADE, on).apply()
+        _sleepFade.value = on
+    }
+
+    /** Unduh hanya lewat Wi-Fi (atau jaringan tak berkuota), terpisah dari Hemat data. Bawaan mati. */
+    private val _wifiOnlyDownloads = MutableStateFlow(prefs.getBoolean(WIFI_ONLY, false))
+    val wifiOnlyDownloads: StateFlow<Boolean> = _wifiOnlyDownloads.asStateFlow()
+
+    fun setWifiOnlyDownloads(on: Boolean) {
+        prefs.edit().putBoolean(WIFI_ONLY, on).apply()
+        _wifiOnlyDownloads.value = on
     }
 
     /** Lanjutkan terakhir diputar: saat aplikasi dibuka lagi, antrean dan posisi lagu kembali seperti tadi. Bawaan nyala. */
@@ -166,6 +212,13 @@ class PlaybackPrefsStore(context: Context) {
 
     private companion object {
         const val QUALITY = "audio_quality"
+        const val RESUME_ON_HEADSET = "resume_on_headset"
+        const val SPEED = "playback_speed"
+        const val KEEP_PITCH = "keep_pitch"
+        const val SLEEP_FADE = "sleep_fade"
+        const val WIFI_ONLY = "wifi_only_downloads"
+        const val MIN_SPEED = 0.5f
+        const val MAX_SPEED = 2f
         const val AUTOPLAY = "autoplay"
         const val SKIP_SILENCE = "skip_silence"
         const val NORMALIZE = "normalize_volume"

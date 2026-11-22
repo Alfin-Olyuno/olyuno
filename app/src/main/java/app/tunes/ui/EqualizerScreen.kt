@@ -7,6 +7,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.material3.FilterChip
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
@@ -20,6 +22,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import app.tunes.MainViewModel
+import app.tunes.player.EqPreset
 import app.tunes.player.EqState
 import app.tunes.player.PlayerState
 import kotlin.math.roundToInt
@@ -71,6 +74,26 @@ fun EqualizerPage(
                     modifier = Modifier.padding(bottom = 8.dp),
                 )
             }
+            // Preset: satu ketukan mengatur semua band; menggeser band manual melepas pilihan preset.
+            Text(
+                t("Preset"),
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 4.dp, bottom = 4.dp),
+            )
+            Row(
+                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(bottom = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                EqPreset.values().forEach { p ->
+                    FilterChip(
+                        selected = state.preset == p.id,
+                        onClick = { vm.applyEqPreset(p) },
+                        enabled = state.enabled,
+                        label = { Text(t(p.label)) },
+                    )
+                }
+            }
             state.levels.forEachIndexed { i, level ->
                 val hz = state.freqsHz.getOrNull(i) ?: 0
                 Row(
@@ -95,6 +118,32 @@ fun EqualizerPage(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = TextAlign.End,
                         modifier = Modifier.width(64.dp),
+                    )
+                }
+            }
+            if (state.bassSupported) {
+                Row(
+                    Modifier.fillMaxWidth().padding(top = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        t("Penguat bass"),
+                        style = MaterialTheme.typography.labelLarge,
+                        modifier = Modifier.width(96.dp),
+                    )
+                    GuardedSlider(
+                        value = state.bass.toFloat(),
+                        onValueChange = { vm.setEqBass(it.roundToInt()) },
+                        valueRange = 0f..1000f,
+                        enabled = state.enabled,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(
+                        "${state.bass / 10}%",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.End,
+                        modifier = Modifier.width(48.dp),
                     )
                 }
             }

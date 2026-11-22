@@ -25,6 +25,7 @@ import androidx.compose.material.icons.rounded.FileUpload
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Insights
+import androidx.compose.material.icons.rounded.LocalFireDepartment
 import androidx.compose.material.icons.rounded.Mail
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.foundation.background
@@ -64,6 +65,7 @@ fun AndaScreen(
     onOpenEqualizer: () -> Unit,
     onOpenHistory: () -> Unit,
     onOpenStats: () -> Unit,
+    onOpenStreak: () -> Unit,
     onOpenInfo: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenAbout: () -> Unit,
@@ -102,6 +104,8 @@ fun AndaScreen(
             MenuDivider()
             MenuItem(Icons.Rounded.Insights, t("Statistik"), onOpenStats)
             MenuDivider()
+            MenuItem(Icons.Rounded.LocalFireDepartment, t("Streak"), onOpenStreak)
+            MenuDivider()
             MenuItem(Icons.Rounded.Equalizer, t("Ekualiser"), onOpenEqualizer)
         }
         MenuGroup {
@@ -139,7 +143,7 @@ internal fun MenuGroup(content: @Composable ColumnScope.() -> Unit) {
             .padding(start = 16.dp, end = 16.dp, top = 16.dp)
             .clip(RoundedCornerShape(28.dp))
             // Gaya Kaca: kartu agak tembus dengan garis tipis di tepinya; gaya Biasa: solid seperti semula.
-            .background(glassContainer(MaterialTheme.colorScheme.surfaceContainerHigh, 0.66f, 0.66f))
+            .background(glassContainer(MaterialTheme.colorScheme.surfaceContainerHigh))
             .then(
                 if (LocalGlass.current.enabled) {
                     Modifier.border(0.5.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(28.dp))

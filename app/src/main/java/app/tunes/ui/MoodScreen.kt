@@ -174,13 +174,22 @@ private fun CenterMessageWithRetry(message: String, onRetry: () -> Unit) {
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
+        val isEmptyNotice = message == t("Tidak ada lagu di sini")
+        if (!isEmptyNotice) {
+            Text(
+                t("Gagal memuat Genre"),
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.padding(horizontal = 32.dp),
+            )
+        }
         Text(
             message,
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(horizontal = 32.dp),
         )
-        TextButton(onClick = onRetry) { Text("Coba lagi") }
+        RetryTextButton(onClick = onRetry)
     }
 }
 

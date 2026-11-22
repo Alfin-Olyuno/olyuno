@@ -15,6 +15,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Logout
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Language
+import androidx.compose.material.icons.rounded.Notifications
 import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.QueueMusic
 import androidx.compose.material.icons.rounded.Storage
@@ -51,6 +52,7 @@ fun SettingsPage(
     onOpenPlayback: () -> Unit,
     onOpenLyrics: () -> Unit,
     onOpenStorage: () -> Unit,
+    onOpenNotifications: () -> Unit,
     onOpenAbout: () -> Unit,
     vm: MainViewModel,
     player: PlayerState,
@@ -99,6 +101,8 @@ fun SettingsPage(
                 MenuItem(Icons.Rounded.Language, t("Bahasa"), onOpenLanguage)
                 MenuDivider()
                 MenuItem(Icons.Rounded.Storage, t("Penyimpanan"), onOpenStorage)
+                MenuDivider()
+                MenuItem(Icons.Rounded.Notifications, t("Notifikasi"), onOpenNotifications)
             }
             // Pemutar: perilaku pemutaran (termasuk audio) & lirik.
             MenuGroup {

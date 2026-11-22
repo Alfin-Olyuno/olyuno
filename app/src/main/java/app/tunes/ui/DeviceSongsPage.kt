@@ -84,6 +84,8 @@ fun DeviceSongsPage(
     onOpenPlayer: () -> Unit,
 ) {
     PageBackHandler(onBack = onBack)
+    val search = rememberListSearch()
+    ListSearchBackHandler(search)
     val context = LocalContext.current
     val bars = rememberBarsCollapse(countUnconsumed = true)
 
@@ -108,14 +110,11 @@ fun DeviceSongsPage(
     PageSurface {
         MiniPlayerScaffold(
             topBar = {
-                TopAppBar(
-                    colors = translucentBarColors(),
-                    title = { Text("Lagu perangkat") },
-                    navigationIcon = {
-                        IconButton(onClick = onBack) {
-                            Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = t("Kembali"))
-                        }
-                    },
+                SearchableTopBar(
+                    title = "Lagu perangkat",
+                    onBack = onBack,
+                    search = search,
+                    canSearch = granted && state is DeviceSongsState.Loaded && state.songs.isNotEmpty(),
                 )
             },
             bars = bars,
@@ -177,17 +176,19 @@ fun DeviceSongsPage(
                         verticalArrangement = Arrangement.Center,
                     ) {
                         Text(
-                            t("Gagal memuat lagu di perangkat"),
+                            t("Gagal memuat Lagu di Perangkat"),
                             style = MaterialTheme.typography.bodyLarge,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
-                        TextButton(onClick = vm::loadDeviceSongs) { Text("Coba lagi") }
+                        RetryTextButton(onClick = vm::loadDeviceSongs)
                     }
 
                     is DeviceSongsState.Loaded -> {
-                        val songs = state.songs
-                        if (songs.isEmpty()) {
+                        val songs = state.songs.filterBySearch(search.query)
+                        if (state.songs.isEmpty()) {
                             CenterMessage(t("Tidak ada lagu di perangkat"))
+                        } else if (songs.isEmpty()) {
+                            CenterMessage(t("Tidak ada hasil"))
                         } else {
                             LazyColumn(
                                 Modifier.fillMaxSize(),

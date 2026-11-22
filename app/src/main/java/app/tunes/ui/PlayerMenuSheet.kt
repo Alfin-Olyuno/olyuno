@@ -5,6 +5,12 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.material.icons.rounded.Radio
+import androidx.compose.material.icons.rounded.LibraryAdd
+import androidx.compose.material.icons.Icons
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -33,6 +39,10 @@ fun PlayerMenuSheet(
     downloadProgress: Float?,
     downloadFailed: Boolean,
     onDownload: () -> Unit,
+    /** Lagu perangkat: "Mulai radio" disembunyikan (butuh id YouTube). */
+    isLocal: Boolean,
+    onStartRadio: () -> Unit,
+    onAddToPlaylist: () -> Unit,
     normalizeVolume: Boolean,
     onNormalizeVolumeChange: (Boolean) -> Unit,
     onDismiss: () -> Unit,
@@ -67,11 +77,34 @@ fun PlayerMenuSheet(
             Column(Modifier.padding(horizontal = 8.dp)) {
                 SleepTimerButton(sleepTimerLabel(sleep), onOpenSleepTimer)
                 DownloadButton(downloaded, downloadProgress, downloadFailed, onDownload)
+                if (!isLocal) {
+                    SheetActionRow(t("Mulai radio"), Icons.Rounded.Radio, onStartRadio)
+                }
+                SheetActionRow(t("Tambah ke playlist"), Icons.Rounded.LibraryAdd, onAddToPlaylist)
                 DeviceVolumeSlider(Modifier.padding(horizontal = 4.dp, vertical = 12.dp))
                 ToggleRow(t("Normalisasi volume"), normalizeVolume, onNormalizeVolumeChange)
             }
             Spacer(Modifier.height(12.dp))
         }
         }
+    }
+}
+
+/** Baris aksi di sheet Pemutaran: label di kiri, ikon di kanan (gaya sama dengan baris Unduh). */
+@Composable
+private fun SheetActionRow(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, onClick: () -> Unit) {
+    val source = androidx.compose.runtime.remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+    androidx.compose.foundation.layout.Row(
+        Modifier
+            .fillMaxWidth()
+            .pressScale(source, 0.97f)
+            .clip(RoundedCornerShape(16.dp))
+            .pressClickable(source, onClick = onClick)
+            .heightIn(min = 56.dp)
+            .padding(horizontal = 4.dp),
+        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+    ) {
+        Text(label, color = sheetInk, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+        androidx.compose.material3.Icon(icon, contentDescription = null, tint = sheetInk.copy(alpha = 0.72f))
     }
 }

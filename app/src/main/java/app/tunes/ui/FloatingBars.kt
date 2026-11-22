@@ -23,7 +23,12 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredHeight
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Shuffle
+import androidx.compose.ui.unit.Dp
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Icon
@@ -125,7 +130,7 @@ private fun lerpI(a: Int, b: Int, t: Float): Int = (a + (b - a) * t).toInt()
 /** Latar bilah: kaca (blur) kalau gaya Kaca, selain itu warna solid; keduanya dengan garis tipis. */
 @Composable
 private fun Modifier.barSurface(shape: Shape, solid: Color, tintAlpha: Float, config: GlassConfig): Modifier {
-    val base = if (config.enabled) glass(shape, solid.copy(alpha = tintAlpha), config) else clip(shape).background(solid)
+    val base = if (config.enabled) glass(shape, glassBase(solid).copy(alpha = BAR_GLASS_ALPHA), config, minAlpha = BAR_GLASS_ALPHA) else clip(shape).background(solid)
     return base.border(0.5.dp, MaterialTheme.colorScheme.outlineVariant, shape)
 }
 
@@ -536,5 +541,64 @@ fun FloatingBars(
                 }
             }
         }
+    }
+}
+
+private const val FAB = 48
+
+/**
+ * Tombol bulat "muat ulang" (ikon panah menyilang) di atas kanan pemutar mini / bilah tab.
+ *
+ * [visible] false (isi halaman di-scroll ke bawah) = tombol meluncur turun keluar layar sambil memudar;
+ * true (scroll ke atas) = naik lagi. Saat benar-benar tersembunyi tombol dilepas dari komposisi supaya
+ * tidak menangkap sentuhan. [bottomInset] = tinggi bilah bawah (isi Scaffold), jadi tombol selalu tepat di
+ * atas pemutar mini, juga saat pemutar mini muncul / hilang. Ikut turun / memudar saat layar pemutar ditarik.
+ * Animasi mati kalau pengaturan "Animasi smooth" mati.
+ */
+@Composable
+fun RefreshFab(
+    visible: Boolean,
+    bottomInset: Dp,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val smooth = LocalSmoothAnim.current
+    val glass = LocalGlass.current
+    val shown by animateFloatAsState(
+        targetValue = if (visible) 1f else 0f,
+        animationSpec = if (smooth) tween(if (visible) 280 else 220, easing = FastOutSlowInEasing) else snap(),
+        label = "refreshFab",
+    )
+    val spin = remember { Animatable(0f) }
+    val scope = rememberCoroutineScope()
+    if (shown <= 0.001f) return
+
+    Box(
+        modifier
+            .padding(end = SIDE.dp, bottom = bottomInset + GAP.dp)
+            .size(FAB.dp)
+            .graphicsLayer {
+                // Hilang = meluncur ke bawah (melewati bilah di bawahnya) + memudar.
+                translationY = (1f - shown) * (FAB.dp.toPx() + (GAP + 12).dp.toPx())
+                alpha = shown
+            }
+            .followPlayerSheet(-1f)
+            .barSurface(CircleShape, MaterialTheme.colorScheme.surfaceContainerHigh, 0.55f, glass)
+            .clip(CircleShape)
+            .clickable {
+                onClick()
+                scope.launch {
+                    spin.snapTo(0f)
+                    if (smooth) spin.animateTo(360f, tween(520, easing = FastOutSlowInEasing))
+                }
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            Icons.Rounded.Shuffle,
+            contentDescription = t("Muat ulang"),
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.graphicsLayer { rotationZ = spin.value },
+        )
     }
 }

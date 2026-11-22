@@ -1,3 +1,9 @@
 <resources>
     <string name="app_name">Olyuno</string>
+    <string name="shortcut_play_liked">Putar Disukai</string>
+    <string name="shortcut_play_liked_long">Putar lagu yang disukai</string>
+    <string name="shortcut_shuffle_liked">Acak Disukai</string>
+    <string name="shortcut_shuffle_liked_long">Acak lagu yang disukai</string>
+    <string name="shortcut_search">Cari</string>
+    <string name="shortcut_search_long">Cari lagu</string>
 </resources>

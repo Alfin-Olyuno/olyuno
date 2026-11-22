@@ -41,7 +41,7 @@ import app.tunes.i18n.t
 
 /**
  * Sheet pendek untuk memilih layanan lirik. Awalnya hanya "Otomatis" + "Lainnya ›"; setelah "Lainnya"
- * diketuk, sheet melebar secukupnya dan menampilkan LRCLIB, Better Lyrics, Lyrics Plus, BiniLyrics, dan Paxsenix.
+ * diketuk, sheet melebar secukupnya dan menampilkan LRCLIB, Better Lyrics, Lyrics Plus, dan BiniLyrics.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -108,7 +108,6 @@ fun LyricsSourceSheet(
                 SourceRow(LyricsSource.BetterLyrics, current, availability, onSelect)
                 SourceRow(LyricsSource.LyricsPlus, current, availability, onSelect)
                 SourceRow(LyricsSource.BiniLyrics, current, availability, onSelect)
-                SourceRow(LyricsSource.Paxsenix, current, availability, onSelect)
             }
             Spacer(Modifier.height(12.dp))
         }

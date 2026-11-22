@@ -81,6 +81,46 @@ val MIGRATION_1_2 = object : Migration(1, 2) {
     }
 }
 
+/** Playlist buatan pengguna (lokal, tidak terhubung ke akun YouTube Music). */
+@Entity(tableName = "playlists")
+data class PlaylistEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val name: String,
+    val createdAt: Long,
+)
+
+/**
+ * Isi playlist: satu baris per lagu, urut menurut [position]. Info lagu disimpan di sini (bukan di tabel songs)
+ * supaya playlist tetap tampil lengkap walau offline dan tidak ikut mencemari riwayat.
+ */
+@Entity(tableName = "playlist_songs", primaryKeys = ["playlistId", "videoId"], indices = [Index("playlistId")])
+data class PlaylistSongEntity(
+    val playlistId: Long,
+    val videoId: String,
+    val title: String,
+    val artist: String,
+    val durationSec: Int,
+    val thumbnail: String?,
+    val position: Int,
+    val addedAt: Long,
+)
+
+/** Versi 2 -> 3: tabel playlist lokal. Data yang ada tidak disentuh. */
+val MIGRATION_2_3 = object : Migration(2, 3) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `playlists` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                "`name` TEXT NOT NULL, `createdAt` INTEGER NOT NULL)",
+        )
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `playlist_songs` (`playlistId` INTEGER NOT NULL, `videoId` TEXT NOT NULL, " +
+                "`title` TEXT NOT NULL, `artist` TEXT NOT NULL, `durationSec` INTEGER NOT NULL, `thumbnail` TEXT, " +
+                "`position` INTEGER NOT NULL, `addedAt` INTEGER NOT NULL, PRIMARY KEY(`playlistId`, `videoId`))",
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_playlist_songs_playlistId` ON `playlist_songs` (`playlistId`)")
+    }
+}
+
 /** Lagu baru masuk "Paling sering diputar" setelah diputar sebanyak ini. */
 const val MOST_PLAYED_MIN_COUNT = 3
 
@@ -144,9 +184,57 @@ interface SongDao {
     suspend fun removePlays(id: String)
 }
 
-@Database(entities = [SongEntity::class, PlayEntity::class], version = 2, exportSchema = false)
+@Dao
+interface PlaylistDao {
+    @Query("SELECT * FROM playlists ORDER BY createdAt DESC, id DESC")
+    fun playlists(): Flow<List<PlaylistEntity>>
+
+    @Query("SELECT * FROM playlist_songs ORDER BY playlistId, position")
+    fun entries(): Flow<List<PlaylistSongEntity>>
+
+    @Insert
+    suspend fun insertPlaylist(p: PlaylistEntity): Long
+
+    /** Lagu yang sudah ada di playlist itu diabaikan (hasil -1). */
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertSongs(items: List<PlaylistSongEntity>): List<Long>
+
+    @Query("UPDATE playlists SET name = :name WHERE id = :id")
+    suspend fun rename(id: Long, name: String)
+
+    @Query("DELETE FROM playlists WHERE id = :id")
+    suspend fun deletePlaylist(id: Long)
+
+    @Query("DELETE FROM playlist_songs WHERE playlistId = :id")
+    suspend fun deleteSongs(id: Long)
+
+    @Query("DELETE FROM playlist_songs WHERE playlistId = :id AND videoId = :videoId")
+    suspend fun deleteSong(id: Long, videoId: String)
+
+    @Query("SELECT COALESCE(MAX(position), -1) FROM playlist_songs WHERE playlistId = :id")
+    suspend fun maxPosition(id: Long): Int
+
+    @Query("SELECT * FROM playlist_songs WHERE playlistId = :id ORDER BY position")
+    suspend fun songsOf(id: Long): List<PlaylistSongEntity>
+
+    @Query("UPDATE playlist_songs SET position = :pos WHERE playlistId = :id AND videoId = :videoId")
+    suspend fun setPosition(id: Long, videoId: String, pos: Int)
+
+    @Query("SELECT * FROM playlists ORDER BY id")
+    suspend fun allPlaylists(): List<PlaylistEntity>
+
+    @Query("SELECT * FROM playlist_songs ORDER BY playlistId, position")
+    suspend fun allEntries(): List<PlaylistSongEntity>
+}
+
+@Database(
+    entities = [SongEntity::class, PlayEntity::class, PlaylistEntity::class, PlaylistSongEntity::class],
+    version = 3,
+    exportSchema = false,
+)
 abstract class OlyunoDatabase : RoomDatabase() {
     abstract fun songDao(): SongDao
+    abstract fun playlistDao(): PlaylistDao
 }
 
 fun SongEntity.toSong() = SongItem(videoId, title, artist, durationSec, thumbnail)

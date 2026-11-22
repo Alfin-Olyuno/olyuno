@@ -1,5 +1,6 @@
 package app.tunes.ui
 
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.Animatable
@@ -41,6 +42,8 @@ import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.PlaylistAdd
+import androidx.compose.material.icons.rounded.LibraryAdd
+import androidx.compose.material.icons.rounded.Radio
 import androidx.compose.material.icons.rounded.QueueMusic
 import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material3.DropdownMenu
@@ -197,6 +200,19 @@ fun SongMenu(vm: MainViewModel, song: SongItem, dismiss: () -> Unit) {
         leadingIcon = { Icon(Icons.Rounded.QueueMusic, null) },
         onClick = { vm.addToQueue(song); dismiss() },
     )
+    // Radio butuh id YouTube, jadi tidak untuk lagu perangkat.
+    if (!song.isLocal) {
+        DropdownMenuItem(
+            text = { Text(t("Mulai radio")) },
+            leadingIcon = { Icon(Icons.Rounded.Radio, null) },
+            onClick = { vm.startRadio(song); dismiss() },
+        )
+    }
+    DropdownMenuItem(
+        text = { Text(t("Tambah ke playlist")) },
+        leadingIcon = { Icon(Icons.Rounded.LibraryAdd, null) },
+        onClick = { vm.openPlaylistPicker(listOf(song)); dismiss() },
+    )
     val liked by remember(song.videoId) { vm.isLiked(song.videoId) }
         .collectAsStateWithLifecycle(initialValue = false)
     DropdownMenuItem(
@@ -240,7 +256,7 @@ fun MiniPlayer(
             .padding(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 10.dp)
             .glass(
                 RoundedCornerShape(24.dp),
-                MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.55f),
+                glassBase(MaterialTheme.colorScheme.surfaceContainerHigh).copy(alpha = GLASS_ALPHA),
                 glass,
             ),
     ) {
@@ -408,4 +424,19 @@ fun LikedIcon(liked: Boolean) {
             scaleY = scale.value
         },
     )
+}
+
+
+/** Tombol "Coba lagi" dengan ikon panah melingkar, dipakai di semua halaman yang gagal dimuat. */
+@androidx.compose.runtime.Composable
+fun RetryTextButton(onClick: () -> Unit) {
+    androidx.compose.material3.TextButton(onClick = onClick) {
+        androidx.compose.material3.Icon(
+            androidx.compose.material.icons.Icons.Rounded.Refresh,
+            contentDescription = null,
+            modifier = androidx.compose.ui.Modifier.size(18.dp),
+        )
+        androidx.compose.foundation.layout.Spacer(androidx.compose.ui.Modifier.width(8.dp))
+        androidx.compose.material3.Text(app.tunes.i18n.t("Coba lagi"))
+    }
 }

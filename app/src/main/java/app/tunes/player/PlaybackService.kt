@@ -1,5 +1,6 @@
 package app.tunes.player
 
+import app.tunes.i18n.t
 import android.app.PendingIntent
 import android.content.Intent
 import android.content.res.Configuration
@@ -152,6 +153,8 @@ class PlaybackService : MediaSessionService() {
 
         player.addListener(object : Player.Listener {
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                // Streak: waktu dengar lagu dihitung dari nol untuk lagu baru / putar ulang.
+                container.streak.onSongChanged()
                 if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_PLAYLIST_CHANGED && !selfEdit) {
                     // Pengguna memulai antrean lain: sisa antrean lama tidak perlu dilanjutkan.
                     pendingResume = emptyList()
@@ -297,14 +300,45 @@ class PlaybackService : MediaSessionService() {
             container.playbackPrefs.normalize.collect { applyNormalization() }
         }
 
+        // Kecepatan pemutaran + Jaga nada: berlaku langsung dan tetap untuk lagu-lagu berikutnya.
+        mainScope.launch {
+            kotlinx.coroutines.flow.combine(
+                container.playbackPrefs.speed,
+                container.playbackPrefs.keepPitch,
+            ) { speed, keep -> speed to keep }.collect { (speed, keep) ->
+                player.playbackParameters = androidx.media3.common.PlaybackParameters(speed, if (keep) 1f else speed)
+            }
+        }
+
         // Timer tidur: "Akhir lagu" = jeda otomatis di akhir lagu; menit = jeda saat waktunya habis.
         mainScope.launch {
             container.sleepTimer.state.collectLatest { st ->
                 player.setPauseAtEndOfMediaItems(st.untilTrackEnd)
                 if (st.endAtMs > 0L) {
                     val wait = st.endAtMs - android.os.SystemClock.elapsedRealtime()
-                    if (wait > 0L) delay(wait)
-                    player.pause()
+                    if (wait > 0L) {
+                        // Pudarkan volume ~8 detik terakhir (kalau diaktifkan dan sedang memutar), lalu jeda.
+                        val fadeMs = if (container.playbackPrefs.sleepFade.value) minOf(8_000L, wait) else 0L
+                        delay(wait - fadeMs)
+                        if (fadeMs > 0L && player.isPlaying) {
+                            val base = player.volume
+                            try {
+                                val steps = 20
+                                for (i in 1..steps) {
+                                    player.volume = base * (1f - i / steps.toFloat())
+                                    delay(fadeMs / steps)
+                                }
+                                player.pause()
+                            } finally {
+                                player.volume = base
+                            }
+                        } else {
+                            delay(fadeMs)
+                            player.pause()
+                        }
+                    } else {
+                        player.pause()
+                    }
                     container.sleepTimer.cancel()
                 }
             }
@@ -380,6 +414,47 @@ class PlaybackService : MediaSessionService() {
             }
         }
         mainHandler.postDelayed(resumeTick, RESUME_SAVE_MS)
+
+        // Streak: tiap detik catat waktu putar nyata; toast muncul sekali sehari saat hari ini terhitung.
+        val streakTick = object : Runnable {
+            override fun run() {
+                val dur = player.duration.takeIf { it != androidx.media3.common.C.TIME_UNSET && it > 0 } ?: 0L
+                val event = runCatching { container.streak.onTick(player.isPlaying, dur) }.getOrNull()
+                if (event != null) showStreakToast(event)
+                mainHandler.postDelayed(this, 1_000L)
+            }
+        }
+        mainHandler.postDelayed(streakTick, 1_000L)
+
+        // Lanjut saat headset tersambung: hanya kalau musik terhenti otomatis karena headset terputus (bukan dijeda
+        // pengguna) dan belum lewat 10 menit. Ditandai dari alasan jeda "audio becoming noisy".
+        var autoPausedAt = 0L
+        player.addListener(object : Player.Listener {
+            override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                autoPausedAt = if (!playWhenReady && reason == Player.PLAY_WHEN_READY_CHANGE_REASON_AUDIO_BECOMING_NOISY) {
+                    android.os.SystemClock.elapsedRealtime()
+                } else {
+                    0L
+                }
+            }
+        })
+        val audioManager = getSystemService(android.content.Context.AUDIO_SERVICE) as android.media.AudioManager
+        val callback = object : android.media.AudioDeviceCallback() {
+            override fun onAudioDevicesAdded(addedDevices: Array<out android.media.AudioDeviceInfo>) {
+                // Dipanggil juga sekali saat didaftarkan (untuk perangkat yang sudah ada): autoPausedAt masih 0, jadi diabaikan.
+                if (autoPausedAt == 0L || !prefs.resumeOnHeadset.value) return
+                if (addedDevices.none { it.isSink && isHeadsetType(it.type) }) return
+                val fresh = android.os.SystemClock.elapsedRealtime() - autoPausedAt <= HEADSET_RESUME_WINDOW_MS
+                autoPausedAt = 0L
+                if (!fresh || player.playWhenReady || player.mediaItemCount == 0) return
+                // Beri jeda singkat supaya jalur audio ke headset siap sebelum mulai bunyi.
+                mainHandler.postDelayed({
+                    if (!player.playWhenReady && player.mediaItemCount > 0) player.play()
+                }, 800L)
+            }
+        }
+        audioManager.registerAudioDeviceCallback(callback, mainHandler)
+        deviceCallback = callback
 
         // Dimatikan: hapus simpanan. Dinyalakan lagi: simpan antrean yang sedang ada.
         mainScope.launch {
@@ -458,6 +533,9 @@ class PlaybackService : MediaSessionService() {
         const val STALL_GRACE_MS = 10_000L
         const val STALL_RECHECK_MS = 5_000L
         const val RESUME_SAVE_MS = 5_000L
+
+        /** Setelah headset terputus, musik hanya lanjut otomatis kalau headset tersambung lagi dalam waktu ini. */
+        const val HEADSET_RESUME_WINDOW_MS = 10 * 60_000L
     }
 
     private fun downloadedIds(downloads: SongDownloads): Set<String> =
@@ -600,7 +678,37 @@ class PlaybackService : MediaSessionService() {
         stopSelf()
     }
 
+    private var deviceCallback: android.media.AudioDeviceCallback? = null
+
+    private fun isHeadsetType(type: Int): Boolean = when (type) {
+        android.media.AudioDeviceInfo.TYPE_BLUETOOTH_A2DP,
+        android.media.AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
+        android.media.AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
+        android.media.AudioDeviceInfo.TYPE_WIRED_HEADSET,
+        android.media.AudioDeviceInfo.TYPE_USB_HEADSET -> true
+        else -> android.os.Build.VERSION.SDK_INT >= 31 &&
+            (type == android.media.AudioDeviceInfo.TYPE_BLE_HEADSET || type == android.media.AudioDeviceInfo.TYPE_BLE_SPEAKER)
+    }
+
+    /** Toast streak, gaya sama dengan toast \"Anda kembali online.\" (toast sistem, singkat, satu kalimat). */
+    private fun showStreakToast(event: app.tunes.data.StreakEvent) {
+        val text = when (event) {
+            is app.tunes.data.StreakEvent.Started -> t("Streak dimulai.")
+            is app.tunes.data.StreakEvent.Up -> t("Streak %d hari.", event.days)
+            is app.tunes.data.StreakEvent.FreezeUsed -> t("Freeze terpakai, streak Anda aman.")
+            is app.tunes.data.StreakEvent.Record -> t("Rekor streak baru: %d hari.", event.days)
+        }
+        android.widget.Toast.makeText(applicationContext, text, android.widget.Toast.LENGTH_SHORT).show()
+    }
+
     override fun onDestroy() {
+        deviceCallback?.let {
+            runCatching {
+                (getSystemService(android.content.Context.AUDIO_SERVICE) as android.media.AudioManager)
+                    .unregisterAudioDeviceCallback(it)
+            }
+        }
+        deviceCallback = null
         netCallback?.let {
             runCatching {
                 (getSystemService(android.content.Context.CONNECTIVITY_SERVICE) as android.net.ConnectivityManager)
@@ -612,6 +720,7 @@ class PlaybackService : MediaSessionService() {
         island?.release()
         island = null
         session?.player?.let { saveResume(it, (application as OlyunoApp).container, true) }
+        runCatching { (application as OlyunoApp).container.streak.flush() }
         mainScope.cancel()
         (application as OlyunoApp).container.sleepTimer.cancel()
         (application as OlyunoApp).container.equalizer.release()

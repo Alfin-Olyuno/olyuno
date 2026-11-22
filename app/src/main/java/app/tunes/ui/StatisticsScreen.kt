@@ -55,8 +55,6 @@ import app.tunes.data.toStats
 import app.tunes.i18n.AppLanguage
 import app.tunes.i18n.I18n
 import app.tunes.i18n.t
-import app.tunes.innertube.CollectionKind
-import app.tunes.innertube.CollectionRef
 import app.tunes.player.PlayerState
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -279,7 +277,7 @@ fun StatisticsPage(
                                         count = t("%d kali diputar", row.count),
                                         shape = CircleShape,
                                         centered = true,
-                                        onClick = { vm.openCollection(CollectionRef(CollectionKind.QUERY, row.name, query = row.name)) },
+                                        onClick = { vm.openArtist(row.name, row.thumbnail) },
                                     )
                                 }
                             }

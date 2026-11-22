@@ -69,24 +69,28 @@ fun DownloadsPage(
     onOpenPlayer: () -> Unit,
 ) {
     PageBackHandler(onBack = onBack)
+    val search = rememberListSearch()
+    ListSearchBackHandler(search)
     val bars = rememberBarsCollapse(countUnconsumed = true)
     // Lagu yang hanya bagian dari paket tidak ditampilkan sendiri; paketnya yang tampil.
-    val pending = entries.filter { !it.done && it.standalone }
-    val done = entries.filter { it.done && it.standalone }.sortedByDescending { it.addedAt }.map { it.song }
-    val packs = collections.sortedByDescending { it.addedAt }
+    val allPending = entries.filter { !it.done && it.standalone }
+    val allDone = entries.filter { it.done && it.standalone }.sortedByDescending { it.addedAt }.map { it.song }
+    val allPacks = collections.sortedByDescending { it.addedAt }
+    val q = search.query.trim()
+    // Pencarian menyaring lagu (judul / artis) dan paket (nama playlist atau album).
+    val pending = if (q.isEmpty()) allPending else allPending.filter { listOf(it.song).filterBySearch(q).isNotEmpty() }
+    val done = allDone.filterBySearch(q)
+    val packs = if (q.isEmpty()) allPacks else allPacks.filter { it.ref.title.contains(q, ignoreCase = true) }
     val byId = entries.associateBy { it.song.videoId }
 
     PageSurface {
         MiniPlayerScaffold(
             topBar = {
-                TopAppBar(
-                    colors = translucentBarColors(),
-                    title = { Text("Diunduh") },
-                    navigationIcon = {
-                        IconButton(onClick = onBack) {
-                            Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = t("Kembali"))
-                        }
-                    },
+                SearchableTopBar(
+                    title = "Diunduh",
+                    onBack = onBack,
+                    search = search,
+                    canSearch = allPending.isNotEmpty() || allPacks.isNotEmpty() || allDone.isNotEmpty(),
                 )
             },
             bars = bars,
@@ -94,8 +98,10 @@ fun DownloadsPage(
             player = player,
             onOpenPlayer = onOpenPlayer,
         ) {
-                if (pending.isEmpty() && packs.isEmpty() && done.isEmpty()) {
+                if (allPending.isEmpty() && allPacks.isEmpty() && allDone.isEmpty()) {
                     CenterMessage(t("Belum ada lagu yang diunduh"))
+                } else if (pending.isEmpty() && packs.isEmpty() && done.isEmpty()) {
+                    CenterMessage(t("Tidak ada hasil"))
                 } else {
                     LazyColumn(
                         Modifier.fillMaxSize(),

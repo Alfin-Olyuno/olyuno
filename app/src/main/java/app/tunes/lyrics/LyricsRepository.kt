@@ -17,6 +17,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
@@ -94,7 +95,6 @@ class LyricsRepository(
             LyricsSource.Lrclib -> fetchLrclib(song)?.copy(source = "LRCLIB")
             LyricsSource.BetterLyrics -> fetchBetter(song)?.copy(source = "Better Lyrics")
             LyricsSource.BiniLyrics -> fetchBini(song)?.copy(source = "BiniLyrics")
-            LyricsSource.Paxsenix -> fetchPaxsenix(song)?.copy(source = "Paxsenix")
             LyricsSource.LyricsPlus -> fetchLyricsPlus(song)?.copy(source = "Lyrics Plus")
             LyricsSource.Auto -> null // ditangani fetchAuto
         }
@@ -105,18 +105,24 @@ class LyricsRepository(
 
     /**
      * Otomatis: semua layanan ditanya bersamaan; yang dipakai adalah lirik tersinkron dari layanan dengan
-     * prioritas tertinggi (Better Lyrics, Lyrics Plus, BiniLyrics, LRCLIB, Paxsenix). Kalau tidak ada yang tersinkron, lirik polos / instrumental
+     * prioritas tertinggi (Better Lyrics, Lyrics Plus, BiniLyrics, LRCLIB). Kalau tidak ada yang tersinkron, lirik polos / instrumental
      * yang ada. Kalau tidak ada sama sekali, null (tetap "Lirik belum tersedia"). Error hanya dilaporkan kalau
      * tidak ada hasil dan ada layanan yang gagal dijangkau.
      */
     private suspend fun fetchAuto(song: SongItem): Stored? = coroutineScope {
-        val order = listOf(LyricsSource.BetterLyrics, LyricsSource.LyricsPlus, LyricsSource.BiniLyrics, LyricsSource.Lrclib, LyricsSource.Paxsenix)
-        val results = order.map { src -> async { runCatching { fetchFrom(src, song) } } }.awaitAll()
-        val found = results.mapNotNull { it.getOrNull() }
+        val order = listOf(LyricsSource.BetterLyrics, LyricsSource.LyricsPlus, LyricsSource.BiniLyrics, LyricsSource.Lrclib)
+        val results = order.map { src -> async { src to runCatching { fetchFrom(src, song) } } }.awaitAll()
+        val found = results.mapNotNull { it.second.getOrNull() }
         found.firstOrNull { it.synced && !it.instrumental }
             ?: found.firstOrNull { !it.instrumental }
             ?: found.firstOrNull()
-            ?: results.firstNotNullOfOrNull { it.exceptionOrNull() }?.let { throw it }
+            ?: run {
+                val real = results
+                // Ada layanan yang berhasil dijangkau tapi tidak punya lirik, sementara layanan lain gagal:
+                // internet jelas ada, jadi penyebabnya lirik tidak tersedia, bukan "Tidak ada koneksi internet".
+                if (real.any { it.second.isSuccess }) throw IOException("Lirik tidak tersedia")
+                results.firstNotNullOfOrNull { it.second.exceptionOrNull() }?.let { throw it }
+            }
     }
 
     // ---------------------------------------------------- Better Lyrics (TTML)
@@ -179,45 +185,6 @@ class LyricsRepository(
         return if (parsed) Stored(false, true, lrc) else null
     }
 
-    // ------------------------------------------------------------- Paxsenix
-
-    /**
-     * Paxsenix (lirik Musixmatch): GET paxsenixofc.my.id/server/getLyricsMusix.php, tanpa API key, balasan teks LRC
-     * per baris. Pertama pencarian metadata (t, a, d, type=alternative), lalu pencarian judul+artis (q, type=default).
-     * Catatan: endpoint belum bisa diuji dari lingkungan pengembangan; balasan yang bukan LRC dianggap "tidak ada".
-     */
-    private fun fetchPaxsenix(song: SongItem): Stored? {
-        val first = splitArtists(song.artist).firstOrNull().orEmpty()
-        val title = cleanTitle(song.title, first)
-        val dur = song.durationSec
-        val base = "https://paxsenixofc.my.id/server/getLyricsMusix.php"
-        val urls = ArrayList<okhttp3.HttpUrl>()
-        urls += base.toHttpUrl().newBuilder()
-            .addQueryParameter("t", title)
-            .addQueryParameter("a", first)
-            .apply { if (dur > 0) addQueryParameter("d", dur.toString()) }
-            .addQueryParameter("type", "alternative")
-            .build()
-        urls += base.toHttpUrl().newBuilder()
-            .addQueryParameter("q", listOf(title, first).filter { it.isNotEmpty() }.joinToString(" "))
-            .addQueryParameter("type", "default")
-            .build()
-        try {
-            for (url in urls) {
-                val body = requestSoft(url)?.trim().orEmpty()
-                // JSON / HTML = pesan galat layanan, bukan lirik.
-                if (body.isEmpty() || body.startsWith("{") || body.startsWith("[{") || body.startsWith("<")) continue
-                val lrc = body.lineSequence().filter { it.trimStart().startsWith("[") }.joinToString("\n")
-                if (lrc.isBlank()) continue
-                val ok = runCatching { LrcParser.parse(lrc).isNotEmpty() }.getOrDefault(false)
-                if (ok) return Stored(false, true, lrc)
-            }
-        } catch (e: ServiceRejected) {
-            // 401/403: percobaan lain pasti ditolak juga. Anggap lirik tidak tersedia.
-        }
-        return null
-    }
-
     // ------------------------------------------------------------ Lyrics Plus
 
     /**
@@ -265,11 +232,87 @@ class LyricsRepository(
     // ------------------------------------------------------------ BiniLyrics
 
     /**
-     * BiniLyrics hanya bisa dicari lewat ISRC (lyrics-api.binimum.org/?isrc=...), sedangkan data lagu dari
-     * YouTube Music tidak membawa ISRC. Selama itu belum ada, layanan ini selalu "tidak ditemukan".
+     * BiniLyrics (lyrics-api.binimum.org): GET /?track=&artist=&album=&duration= mengembalikan indeks
+     * `{ total, results[] }`; tiap hasil punya `lyricsUrl` ke berkas TTML (lyrics-storage.binimum.org/{ISRC}.ttml),
+     * yang diunduh lalu diubah ke LRC enhanced. Tanpa API key. Bentuk balasan dibaca longgar (beberapa nama kunci),
+     * dan balasan yang tak terduga dianggap "tidak ada".
      */
-    @Suppress("UNUSED_PARAMETER")
-    private fun fetchBini(song: SongItem): Stored? = null
+    private fun fetchBini(song: SongItem): Stored? {
+        val artists = splitArtists(song.artist)
+        val first = artists.firstOrNull().orEmpty()
+        val title = cleanTitle(song.title, first)
+        val dur = song.durationSec
+        // Percobaan kedua tanpa durasi: durasi YouTube Music sering beda beberapa detik dari data Apple Music.
+        val attempts = LinkedHashSet<Int>().apply { add(dur); add(0) }
+        try {
+            for (d in attempts) {
+                fetchBiniOnce(title, first, d)?.let { return it }
+            }
+        } catch (e: ServiceRejected) {
+            // 401/403: percobaan lain pasti ditolak juga. Anggap lirik tidak tersedia.
+        }
+        return null
+    }
+
+    private fun fetchBiniOnce(title: String, artist: String, durationSec: Int): Stored? {
+        val index = "https://lyrics-api.binimum.org/".toHttpUrl()
+        val url = index.newBuilder()
+            .addQueryParameter("track", title)
+            .apply { if (artist.isNotEmpty()) addQueryParameter("artist", artist) }
+            .apply { if (durationSec > 0) addQueryParameter("duration", durationSec.toString()) }
+            .build()
+        val body = request(url)?.trim().orEmpty()
+        if (body.isEmpty()) return null
+        val root = runCatching { json.parseToJsonElement(body) }.getOrNull() ?: return null
+        val items: List<JsonObject> = when (root) {
+            is JsonArray -> root
+            is JsonObject -> (root["results"] ?: root["data"] ?: root["lyrics"]) as? JsonArray
+            else -> null
+        }?.mapNotNull { it as? JsonObject }.orEmpty()
+        if (items.isEmpty()) return null
+
+        fun JsonObject.str(vararg keys: String): String? =
+            keys.firstNotNullOfOrNull { k -> (this[k] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() } }
+        fun norm(x: String) = x.lowercase().filter { it.isLetterOrDigit() }
+        val wantTitle = norm(title)
+        val wantArtist = norm(artist)
+
+        // Urutkan kandidat: judul cocok > artis cocok > durasi dekat > ada waktu per kata.
+        val ranked = items.mapNotNull { o ->
+            val link = o.str("lyricsUrl", "lyrics_url", "ttmlUrl", "url") ?: return@mapNotNull null
+            val t = norm(o.str("track", "trackName", "title", "name", "songName").orEmpty())
+            val a = norm(o.str("artist", "artistName").orEmpty())
+            var score = 0.0
+            if (t.isNotEmpty() && wantTitle.isNotEmpty()) {
+                score += when {
+                    t == wantTitle -> 10.0
+                    t.contains(wantTitle) || wantTitle.contains(t) -> 4.0
+                    else -> return@mapNotNull null // judul beda = lagu lain
+                }
+            }
+            if (wantArtist.isNotEmpty() && a.isNotEmpty()) {
+                score += if (a == wantArtist) 6.0 else if (a.contains(wantArtist) || wantArtist.contains(a)) 3.0 else 0.0
+            }
+            val d = (o["duration"] as? JsonPrimitive)?.doubleOrNull
+            if (durationSec > 0 && d != null) {
+                val sec = if (d > 1000) d / 1000.0 else d // milidetik atau detik
+                val diff = abs(sec - durationSec)
+                if (diff > MAX_DURATION_DIFF_SEC) return@mapNotNull null
+                score -= diff
+            }
+            if (o.toString().contains("rich", ignoreCase = true) || o.toString().contains("word", ignoreCase = true)) score += 2
+            score to link
+        }.sortedByDescending { it.first }
+
+        // Coba beberapa kandidat teratas: berkas TTML kadang 404 / kosong.
+        for ((_, link) in ranked.take(3)) {
+            val ttmlUrl = (link.toHttpUrlOrNull() ?: index.resolve(link)) ?: continue
+            val ttml = request(ttmlUrl)?.takeIf { it.isNotBlank() } ?: continue
+            val lrc = runCatching { TtmlParser.toLrc(ttml) }.getOrNull()?.takeIf { it.isNotBlank() } ?: continue
+            if (runCatching { LrcParser.parse(lrc).isNotEmpty() }.getOrDefault(false)) return Stored(false, true, lrc)
+        }
+        return null
+    }
 
     /**
      * Seperti [request]: semua 4xx selain 408/429 (tidak ada, parameter tidak cocok, 401/403 ditolak server, dst.)

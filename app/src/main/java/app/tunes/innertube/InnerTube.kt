@@ -172,7 +172,20 @@ class InnerTube(
             put("playlistId", "RDAMVM$videoId")
             put("isAudioOnly", true)
         }
-        return root.findAll("playlistPanelVideoRenderer").mapNotNull { r ->
+        return panelSongs(root)
+    }
+
+    /** Isi satu Mix / radio YouTube Music asli (mis. Supermix) lewat id playlist-nya; [extraHeaders] = login akun. */
+    suspend fun playlistQueue(playlistId: String, extraHeaders: Map<String, String> = emptyMap()): List<SongItem> {
+        val root = post(Clients.WEB_REMIX, "next", extraHeaders) {
+            put("playlistId", playlistId)
+            put("isAudioOnly", true)
+        }
+        return panelSongs(root)
+    }
+
+    private fun panelSongs(root: JsonObject): List<SongItem> =
+        root.findAll("playlistPanelVideoRenderer").mapNotNull { r ->
             val id = r["videoId"].text ?: return@mapNotNull null
             val title = r.path("title", "runs").objects().joinToString("") { it["text"].text.orEmpty() }
             if (title.isBlank()) return@mapNotNull null
@@ -181,7 +194,6 @@ class InnerTube(
             val thumb = (r.path("thumbnail", "thumbnails") as? JsonArray)?.lastOrNull().path("url").text?.hiRes()
             SongItem(id, title, artist, duration, thumb)
         }.distinctBy { it.videoId }
-    }
 
     // -------------------------------------------------------------- Stream
 

@@ -9,11 +9,14 @@ import app.tunes.data.BackupFormatException
 import app.tunes.data.DownloadEntry
 import app.tunes.data.DownloadedCollection
 import app.tunes.data.HistoryEntry
+import app.tunes.data.StatArtist
+import app.tunes.data.toStats
 import app.tunes.innertube.AccountInfo
 import app.tunes.innertube.CollectionKind
 import app.tunes.innertube.CollectionRef
 import app.tunes.innertube.SearchResults
 import app.tunes.innertube.SongItem
+import app.tunes.innertube.MixPlaylist
 import app.tunes.innertube.accountInfo
 import app.tunes.innertube.isAuthError
 import app.tunes.innertube.fallbackGenres
@@ -146,6 +149,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val q = _query.value.trim()
         if (q.isEmpty()) return
         container.searchHistory.add(q)
+        runSearch(q)
+    }
+
+    private fun runSearch(q: String) {
         suggestJob?.cancel()
         _suggestions.value = emptyList()
         searchJob?.cancel()
@@ -234,9 +241,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** null = sedang memuat. Selalu terisi setelahnya (cadangan lokal bila jaringan gagal). */
     val genres: StateFlow<List<CollectionRef>?> = _genres.asStateFlow()
 
-    fun loadGenres() {
-        if (_genres.value != null) return
-        viewModelScope.launch {
+    private var genresJob: Job? = null
+
+    /** [force] = muat ulang dari awal (tampil kerangka dulu), urutan diacak lagi. */
+    fun loadGenres(force: Boolean = false) {
+        if (!force && _genres.value != null) return
+        genresJob?.cancel()
+        genresJob = viewModelScope.launch {
+            if (force) _genres.value = null
             _genres.value = try {
                 innerTube.genres().ifEmpty { fallbackGenres }.shuffled()
             } catch (e: CancellationException) {
@@ -247,9 +259,20 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Acak urutan genre di beranda (dipanggil dari tombol acak). */
-    fun shuffleGenres() {
-        _genres.value = _genres.value?.shuffled()
+    /** Tombol muat ulang di Beranda: semua bagian dimuat ulang (genre ikut diacak). */
+    fun refreshHome() {
+        loadQuickPicks(force = true)
+        loadTrending(force = true)
+        loadGenres(force = true)
+        loadMixPlaylists()
+        refreshStreak()
+        refreshRecent()
+    }
+
+    /** Tombol muat ulang di Cari: hasil pencarian yang sedang tampil dicari ulang; kalau tidak ada, riwayat akun dimuat ulang. */
+    fun refreshSearch() {
+        val q = _query.value.trim()
+        if (q.isNotEmpty() && _search.value !is SearchState.Idle) runSearch(q) else refreshRecent()
     }
 
     // ------------------------------------------------------- lagu perangkat
@@ -294,6 +317,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         downloadedKey = null
         _openCollection.value = ref
         loadCollection(ref)
+    }
+
+    /**
+     * Buka halaman artis dari namanya saja (mis. kartu "Andalanmu" / Statistik). Halaman langsung terbuka dengan
+     * [thumbnail] sementara, lalu halaman artis aslinya dicari dan dimuat (foto dan lagu-lagu artis itu).
+     */
+    fun openArtist(name: String, thumbnail: String? = null) {
+        openCollection(CollectionRef(CollectionKind.ARTIST, name, thumbnail = thumbnail))
     }
 
     /** Buka paket playlist/album yang sudah diunduh: tampilan sama, isinya dari penyimpanan (tanpa internet). */
@@ -341,11 +372,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _collection.value = CollectionState.Loading
         collectionJob = viewModelScope.launch {
             _collection.value = try {
-                val data = innerTube.loadCollection(ref)
+                val data = if (ref.kind == CollectionKind.MIX) {
+                    val songs = container.sync.fetchMixSongs(ref.browseId.orEmpty()).orEmpty()
+                    app.tunes.innertube.CollectionData(songs, CollectionInfo(thumbnail = ref.thumbnail))
+                } else {
+                    innerTube.loadCollection(ref)
+                }
                 if (data.songs.isEmpty()) {
                     CollectionState.Error(t("Tidak ada lagu di sini"))
                 } else {
-                    collectionCache[ref.key] = data
+                    // Mix pribadi berubah-ubah, jadi tidak disimpan: dibuka lagi = isi terbaru dari akun.
+                    if (ref.kind != CollectionKind.MIX) collectionCache[ref.key] = data
                     CollectionState.Loaded(data.songs, data.info, data.playlists)
                 }
             } catch (e: CancellationException) {
@@ -412,6 +449,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** Artis yang paling sering diputar (seluruh waktu), untuk bagian "Andalanmu" di Beranda. */
+    val topArtists: StateFlow<List<StatArtist>> =
+        repo.plays(0L).map { rows -> rows.toStats(12).artists }
+            .distinctUntilChanged()
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
     /** Log putaran sejak [from] (ms), terbaru di depan, untuk halaman Statistik. */
     fun playRows(from: Long) = repo.plays(from)
 
@@ -444,6 +487,64 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Pesan singkat untuk Snackbar (mis. sesi habis). */
     private val _messages = MutableSharedFlow<String>(extraBufferCapacity = 4)
     val messages: SharedFlow<String> = _messages.asSharedFlow()
+
+    /** Playlist akun untuk "Mix untukmu" di Beranda; kosong = belum masuk / belum dimuat. */
+    private val _mixPlaylists = MutableStateFlow<List<MixPlaylist>>(emptyList())
+    val mixPlaylists: StateFlow<List<MixPlaylist>> = _mixPlaylists.asStateFlow()
+
+    /** Status pemuatan "Mix untukmu": dipakai Beranda untuk kerangka (Loading) dan tombol coba lagi (Error). */
+    private val _mixStatus = MutableStateFlow(MixStatus.Idle)
+    val mixStatus: StateFlow<MixStatus> = _mixStatus.asStateFlow()
+
+    private var mixJob: Job? = null
+    private var mixLoadedAt = 0L
+
+    /**
+     * Muat Mix & playlist akun dari YouTube Music. Daftar lama tetap tampil selama memuat atau kalau gagal.
+     * Gagal (bukan masalah sesi) dicoba sekali lagi setelah 4 detik; sesi habis memberi tahu pengguna.
+     */
+    private fun loadMixPlaylists() {
+        if (container.account.cookie() == null) return
+        if (mixJob?.isActive == true) return
+        mixJob = viewModelScope.launch {
+            _mixStatus.value = MixStatus.Loading
+            var error: Exception? = null
+            for (attempt in 0..1) {
+                try {
+                    val list = container.sync.fetchMixPlaylists()
+                    if (list != null) {
+                        _mixPlaylists.value = list
+                        mixLoadedAt = android.os.SystemClock.elapsedRealtime()
+                    }
+                    error = null
+                    break
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    error = e
+                    if (e.isAuthError()) break
+                    if (attempt == 0) delay(4_000)
+                }
+            }
+            val err = error
+            if (err == null) {
+                _mixStatus.value = MixStatus.Ready
+            } else {
+                _mixStatus.value = MixStatus.Error
+                if (err.isAuthError()) _messages.tryEmit(t("Sesi YouTube Music habis, masuk lagi lewat tab Anda"))
+            }
+        }
+    }
+
+    /** Dipanggil Beranda tiap kembali ke aplikasi: muat ulang kalau sudah > 5 menit, atau sebelumnya gagal. */
+    fun refreshMix() {
+        if (container.account.cookie() == null) return
+        val stale = android.os.SystemClock.elapsedRealtime() - mixLoadedAt > 5 * 60_000L || mixLoadedAt == 0L
+        if (stale || _mixStatus.value == MixStatus.Error) loadMixPlaylists()
+    }
+
+    /** Tombol "Coba lagi" di kartu Mix yang gagal dimuat. */
+    fun retryMix() = loadMixPlaylists()
 
     private val _remoteHistory = MutableStateFlow<List<SongItem>?>(null)
 
@@ -511,13 +612,63 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun removeDownload(song: SongItem) = container.downloads.removeSong(song.videoId)
 
+    // ------------------------------------------------ playlist lokal
+    val localPlaylists: StateFlow<List<app.tunes.data.LocalPlaylist>> = container.playlists.playlists
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** Lagu yang sedang dipilih untuk dimasukkan ke playlist (null = pemilih tertutup). Pemilihnya digambar di OlyunoRoot. */
+    private val _playlistPicker = MutableStateFlow<List<SongItem>?>(null)
+    val playlistPicker: StateFlow<List<SongItem>?> = _playlistPicker.asStateFlow()
+
+    fun openPlaylistPicker(songs: List<SongItem>) {
+        if (songs.isNotEmpty()) _playlistPicker.value = songs
+    }
+
+    fun closePlaylistPicker() {
+        _playlistPicker.value = null
+    }
+
+    fun createPlaylist(name: String, songs: List<SongItem> = emptyList()) {
+        val n = name.trim().take(60)
+        if (n.isEmpty()) return
+        viewModelScope.launch {
+            container.playlists.create(n, songs)
+            _messages.tryEmit(t("Playlist \"%s\" dibuat", n))
+        }
+    }
+
+    fun addToPlaylist(playlist: app.tunes.data.LocalPlaylist, songs: List<SongItem>) {
+        viewModelScope.launch {
+            val added = container.playlists.addSongs(playlist.id, songs)
+            _messages.tryEmit(
+                if (added > 0) t("Ditambahkan ke \"%s\"", playlist.name) else t("Sudah ada di \"%s\"", playlist.name),
+            )
+        }
+    }
+
+    fun renamePlaylist(id: Long, name: String) {
+        viewModelScope.launch { container.playlists.rename(id, name.trim().take(60)) }
+    }
+
+    fun deletePlaylist(id: Long) {
+        viewModelScope.launch { container.playlists.delete(id) }
+    }
+
+    fun removeFromPlaylist(id: Long, videoId: String) {
+        viewModelScope.launch { container.playlists.removeSong(id, videoId) }
+    }
+
+    fun moveInPlaylist(id: Long, videoId: String, delta: Int) {
+        viewModelScope.launch { container.playlists.moveSong(id, videoId, delta) }
+    }
+
     // ------------------------------------------------ cadangan (ekspor / impor)
     /** Tulis semua data lokal ke file pilihan pengguna. Hasilnya diumumkan lewat [messages]. */
     fun exportTo(uri: android.net.Uri, onDone: (Boolean) -> Unit = {}) {
         viewModelScope.launch {
             var ok = false
             val msg = try {
-                val data = BackupData(repo.exportAll(), container.searchHistory.items.value, repo.exportPlays())
+                val data = BackupData(repo.exportAll(), container.searchHistory.items.value, repo.exportPlays(), container.playlists.exportAll(), container.streak.toBackup())
                 val json = Backup.toJson(data)
                 withContext(Dispatchers.IO) {
                     val out = getApplication<Application>().contentResolver.openOutputStream(uri, "wt")
@@ -548,7 +699,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 val data = Backup.parse(text)
                 repo.mergeImported(data.songs)
                 repo.mergePlays(data.plays)
+                container.playlists.mergeImported(data.playlists)
                 container.searchHistory.mergeIn(data.searches)
+                // Streak: hanya diterima kalau streak lokal hampir kosong (pemulihan), dan tanda tangannya cocok.
+                if (data.streakRejected) {
+                    _messages.tryEmit(t("Data streak tidak valid, dilewati."))
+                } else {
+                    data.streak?.let { b ->
+                        if (container.streak.importBackup(b) == app.tunes.data.StreakImportResult.SkippedExisting) {
+                            _messages.tryEmit(t("Streak lokal sudah berjalan, data streak di cadangan dilewati."))
+                        }
+                    }
+                }
                 // Sudah masuk: suka dari cadangan ikut dikirim ke akun (diantre, lalu disinkronkan).
                 if (container.account.cookie() != null) {
                     data.songs.filter { it.liked }.forEach { container.account.setPending(it.videoId, true) }
@@ -587,12 +749,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             } catch (e: Exception) {
                 reportSyncError(e, t("Gagal sinkron dengan YouTube Music"))
             }
+            loadMixPlaylists()
         }
     }
 
     /** Sinkron otomatis (saat aplikasi dibuka, setelah masuk / impor): hanya kalau toggle-nya menyala. */
     private fun autoSyncNow() {
         if (container.account.autoSync.value) syncNow()
+        else if (container.account.cookie() != null) loadMixPlaylists() // Mix tetap dimuat walau sinkron otomatis mati
     }
 
     /** Otomatis sinkronisasi dengan akun (toggle di Pengaturan). */
@@ -615,6 +779,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val uiStyle: StateFlow<app.tunes.data.UiStyle> = container.appearance.style
     fun setUiStyle(style: app.tunes.data.UiStyle) = container.appearance.setStyle(style)
     val smoothAnim: StateFlow<Boolean> = container.appearance.smoothAnim
+
+    /** Streak mendengarkan (lihat StreakStore). */
+    val streak: StateFlow<app.tunes.data.StreakState> = container.streak.state
+    fun refreshStreak() = container.streak.refresh()
     val bgThumbnail: StateFlow<Boolean> = container.appearance.bgThumbnail
     fun setBgThumbnail(enabled: Boolean) = container.appearance.setBgThumbnail(enabled)
     val playerBgColor: StateFlow<Int?> = container.appearance.playerBg
@@ -662,6 +830,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun logout() {
         syncJob?.cancel()
         _remoteHistory.value = null
+        mixJob?.cancel()
+        _mixPlaylists.value = emptyList()
+        _mixStatus.value = MixStatus.Idle
+        mixLoadedAt = 0L
         container.account.clear()
         android.webkit.CookieManager.getInstance().removeAllCookies(null)
     }
@@ -671,6 +843,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun setEqEnabled(enabled: Boolean) = container.equalizer.setEnabled(enabled)
     fun setEqBand(index: Int, level: Int) = container.equalizer.setBand(index, level)
     fun resetEq() = container.equalizer.reset()
+    fun applyEqPreset(preset: app.tunes.player.EqPreset) = container.equalizer.applyPreset(preset)
+    fun setEqBass(strength: Int) = container.equalizer.setBass(strength)
 
     // ------------------------------------------------------------ informasi
     /** Id pesan informasi yang sudah dibuka pengguna. */
@@ -746,7 +920,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** true (dan memberi tahu pengguna) kalau Hemat data aktif dan perangkat memakai data seluler / berkuota. */
     private fun downloadBlockedByDataSaver(): Boolean {
-        if (!container.playbackPrefs.dataSaver.value) return false
+        val saver = container.playbackPrefs.dataSaver.value
+        if (!saver && !container.playbackPrefs.wifiOnlyDownloads.value) return false
         val metered = try {
             val cm = getApplication<Application>().getSystemService(android.content.Context.CONNECTIVITY_SERVICE)
                 as android.net.ConnectivityManager
@@ -754,9 +929,38 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         } catch (e: Exception) {
             false
         }
-        if (metered) _messages.tryEmit(t("Hemat data aktif: unduhan hanya lewat Wi-Fi"))
+        if (metered) {
+            _messages.tryEmit(
+                if (saver) t("Hemat data aktif: unduhan hanya lewat Wi-Fi")
+                else t("Unduh hanya lewat Wi-Fi aktif: sambungkan ke Wi-Fi dulu"),
+            )
+        }
         return metered
     }
+
+    /** Lanjut otomatis saat headset tersambung lagi. */
+    val resumeOnHeadset: StateFlow<Boolean> = container.playbackPrefs.resumeOnHeadset
+    fun setResumeOnHeadset(on: Boolean) = container.playbackPrefs.setResumeOnHeadset(on)
+
+    /** Kecepatan pemutaran (0.5x-2x) dan Jaga nada. */
+    val playbackSpeed: StateFlow<Float> = container.playbackPrefs.speed
+    fun setPlaybackSpeed(v: Float) = container.playbackPrefs.setSpeed(v)
+    val keepPitch: StateFlow<Boolean> = container.playbackPrefs.keepPitch
+    fun setKeepPitch(on: Boolean) = container.playbackPrefs.setKeepPitch(on)
+
+    /** Timer tidur memudarkan volume sebelum jeda. */
+    val sleepFade: StateFlow<Boolean> = container.playbackPrefs.sleepFade
+    fun setSleepFade(on: Boolean) = container.playbackPrefs.setSleepFade(on)
+
+    /** Unduh hanya lewat Wi-Fi, terpisah dari Hemat data. */
+    val wifiOnlyDownloads: StateFlow<Boolean> = container.playbackPrefs.wifiOnlyDownloads
+    fun setWifiOnlyDownloads(on: Boolean) = container.playbackPrefs.setWifiOnlyDownloads(on)
+
+    /** Notifikasi unduhan gagal / selesai (halaman Notifikasi). */
+    val notifyDownloadFailed: StateFlow<Boolean> = container.notificationPrefs.downloadFailed
+    fun setNotifyDownloadFailed(on: Boolean) = container.notificationPrefs.setDownloadFailed(on)
+    val notifyDownloadDone: StateFlow<Boolean> = container.notificationPrefs.downloadDone
+    fun setNotifyDownloadDone(on: Boolean) = container.notificationPrefs.setDownloadDone(on)
 
     /** Lanjutkan terakhir diputar: antrean & posisi lagu dipulihkan saat aplikasi dibuka lagi. */
     val resumeLast: StateFlow<Boolean> = container.playbackPrefs.resumeLast
@@ -871,6 +1075,88 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * "Mulai radio" dari satu lagu: antrean diganti lagu serupa dari YouTube Music. Kalau lagunya sedang diputar,
+     * ia tetap berbunyi tanpa mulai ulang dan hanya sisa antreannya yang diganti radio; kalau bukan, lagunya
+     * diputar dari awal diikuti radio.
+     */
+    fun startRadio(song: SongItem) {
+        if (song.isLocal) {
+            _messages.tryEmit(t("Radio hanya tersedia untuk lagu YouTube Music"))
+            return
+        }
+        viewModelScope.launch {
+            _messages.tryEmit(t("Memulai radio dari \"%s\"", song.title))
+            val radio = try {
+                innerTube.radio(song.videoId).filter { it.videoId != song.videoId }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _messages.tryEmit(t("Gagal memulai radio: %s", e.userMessage("kesalahan tidak dikenal")))
+                return@launch
+            }
+            if (radio.isEmpty()) {
+                _messages.tryEmit(t("Radio tidak tersedia untuk lagu ini"))
+                return@launch
+            }
+            if (connection.currentMediaId() == song.videoId) {
+                connection.clearUpcoming()
+                connection.append(radio)
+            } else {
+                app.tunes.data.PlayContext.current = null
+                connection.play(listOf(song) + radio, 0)
+            }
+        }
+    }
+
+    /** Pintasan ikon "Putar Disukai" / "Acak Disukai": langsung memutar semua lagu yang disukai. */
+    fun playLikedFromShortcut(shuffle: Boolean) {
+        viewModelScope.launch {
+            val songs = repo.liked.first()
+            if (songs.isEmpty()) {
+                _messages.tryEmit(t("Belum ada lagu yang disukai"))
+                return@launch
+            }
+            app.tunes.data.PlayContext.current = null
+            connection.play(if (shuffle) songs.shuffled() else songs, 0)
+        }
+    }
+
+    /**
+     * Tautan YouTube / YouTube Music yang dibuka di Olyuno (ketuk tautan atau menu Bagikan): lagu diputar dan
+     * disambung radio, tautan playlist diputar dari awal.
+     */
+    fun openSharedLink(uri: android.net.Uri) {
+        val videoId = app.tunes.data.SharedLinks.videoId(uri)
+        val listId = app.tunes.data.SharedLinks.playlistId(uri)
+        if (videoId == null && listId == null) {
+            _messages.tryEmit(t("Tautan ini tidak bisa dibuka di Olyuno"))
+            return
+        }
+        viewModelScope.launch {
+            _messages.tryEmit(t("Membuka tautan…"))
+            try {
+                if (videoId != null) {
+                    // Info lagu (judul, artis, sampul) diambil dari panel "berikutnya"; lagu asal ada di urutan pertama.
+                    val seed = innerTube.radio(videoId).firstOrNull { it.videoId == videoId }
+                    if (seed == null) _messages.tryEmit(t("Lagu dari tautan tidak ditemukan")) else playSong(seed)
+                } else {
+                    val songs = innerTube.playlistQueue(listId!!)
+                    if (songs.isEmpty()) {
+                        _messages.tryEmit(t("Playlist dari tautan tidak ditemukan"))
+                    } else {
+                        app.tunes.data.PlayContext.current = null
+                        connection.play(songs, 0)
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _messages.tryEmit(t("Gagal membuka tautan: %s", e.userMessage("kesalahan tidak dikenal")))
+            }
+        }
+    }
+
     fun playList(songs: List<SongItem>, index: Int) {
         // Putaran dari halaman album / playlist dicatat bersama koleksinya (untuk statistik album & playlist).
         app.tunes.data.PlayContext.current = _openCollection.value
@@ -880,6 +1166,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun playNext(song: SongItem) = connection.playNext(song)
     fun addToQueue(song: SongItem) = connection.append(listOf(song))
     fun addAllToQueue(songs: List<SongItem>) = connection.append(songs)
+    fun moveQueueItem(from: Int, to: Int) = connection.moveQueueItem(from, to)
+    fun moveQueueItemNext(index: Int) = connection.moveQueueItemNext(index)
+    fun removeQueueItem(index: Int) = connection.removeQueueItem(index)
+    fun clearUpcomingQueue() = connection.clearUpcoming()
 
     fun togglePlay() = connection.togglePlay()
     fun next() = connection.next()
@@ -896,6 +1186,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         loadTrending()
         loadGenres()
         autoSyncNow()
+        container.downloadNotifier
         container.downloads.resumePending()
         // Halaman paket unduhan yang sedang terbuka ikut diperbarui saat lagunya selesai diunduh / dihapus.
         viewModelScope.launch {
@@ -909,3 +1200,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         super.onCleared()
     }
 }
+
+/** Status pemuatan "Mix untukmu" di Beranda. */
+enum class MixStatus { Idle, Loading, Ready, Error }

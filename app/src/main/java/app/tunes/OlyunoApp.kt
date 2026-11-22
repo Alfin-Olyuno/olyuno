@@ -33,16 +33,19 @@ class AppContainer(context: Context) {
     val streamResolver = StreamResolver(innerTube, onLoudness = playbackPrefs::saveLoudness) { effectiveQuality(context.applicationContext) }
 
     private val db = Room.databaseBuilder(context, OlyunoDatabase::class.java, "tunes.db")
-        .addMigrations(app.tunes.data.MIGRATION_1_2)
+        .addMigrations(app.tunes.data.MIGRATION_1_2, app.tunes.data.MIGRATION_2_3)
         .build()
     val songs = SongRepository(db.songDao())
+    val playlists = app.tunes.data.PlaylistRepository(db)
     val localSongs = app.tunes.data.LocalSongs(context)
     val lyrics = LyricsRepository(context.cacheDir)
     val lyricsSource = LyricsSourceStore(context)
     val lyricsPrefs = LyricsPrefsStore(context)
     val sleepTimer = app.tunes.data.SleepTimerStore()
+    val streak = app.tunes.data.StreakStore(context)
     val islandPrefs = app.tunes.data.IslandPrefsStore(context)
     val storagePrefs = app.tunes.data.StoragePrefsStore(context)
+    val notificationPrefs = app.tunes.data.NotificationPrefsStore(context)
     val translations = TranslationRepository(context.cacheDir)
     val info = InfoStore(context)
     val searchHistory = SearchHistoryStore(context)
@@ -77,11 +80,17 @@ class AppContainer(context: Context) {
     val storage: app.tunes.data.StorageManager by lazy { app.tunes.data.StorageManager(appContext, this) }
     val downloads: SongDownloads by lazy {
         SongDownloads(
+            appContext,
             DownloadStore(appContext),
             app.tunes.data.DownloadedCollectionStore(appContext),
             java.io.File(appContext.filesDir, "download_thumbs"),
             cachesLazy,
         )
+    }
+
+    /** Notifikasi progres & gagal unduhan; mulai mengamati unduhan begitu dibuat (lihat MainViewModel.resumePending). */
+    val downloadNotifier: app.tunes.player.DownloadNotifier by lazy {
+        app.tunes.player.DownloadNotifier(appContext, downloads, notificationPrefs).also { it.start() }
     }
 }
 

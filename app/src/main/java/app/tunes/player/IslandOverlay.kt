@@ -6,11 +6,13 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Outline
 import android.graphics.Paint
 import android.graphics.PixelFormat
+import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -64,7 +66,8 @@ import kotlin.math.abs
  *  - Ketuk mini -> membesar (animasi per-frame: lebar, tinggi, sudut) menjadi pemutar penuh:
  *    cover, judul/artis, seek bar yang bisa digeser, waktu, sebelumnya / putar-jeda / berikutnya.
  *  - Tarik kartu besar ke bawah (seperti bottom sheet) -> masuk ke layar pemutar di aplikasi Olyuno.
- *  - Geser kartu besar ke atas / kiri / kanan -> mengecil.
+ *  - Geser kartu (kecil maupun besar) ke kanan -> lagu sebelumnya (tidak bisa kalau tidak ada), ke kiri -> lagu berikutnya.
+ *    Geser kartu besar ke atas -> mengecil.
  *  - Membesar lalu mengecil lagi kalau: pengguna menyentuh / scroll di mana pun di luar kartu
  *    (lewat FLAG_WATCH_OUTSIDE_TOUCH), layar mati, atau 5 detik tanpa sentuhan sama sekali.
  *  - Muncul selama fitur dinyalakan, ada lagu di antrean, dan Olyuno sendiri tidak sedang dibuka.
@@ -169,6 +172,7 @@ class IslandOverlay(
     private var bigR = 0f
     private var shownPlaying: Boolean? = null
     private var artUrl: String? = null
+    private var glassBmp: Bitmap? = null
     private var palette: SongPalette = SongPalette.Default
 
     /**
@@ -279,7 +283,6 @@ class IslandOverlay(
                         applyContentVisibility()
                         applyStyle()
                         applyFraction(fraction)
-                        applyWindowBlur()
                     }
                 }
             }
@@ -366,13 +369,12 @@ class IslandOverlay(
         exiting = false
         expanded = false
         fraction = 0f
-        applyWindowBlur()
         shownPlaying = null
         artUrl = null
         applyFraction(0f)
 
         // Animasi masuk: turun dari atas sambil membesar dengan sedikit pantulan.
-        r.pivotX = miniW / 2f
+        r.pivotX = miniW / 2f + dp(SWIPE_PAD_DP)
         r.pivotY = 0f
         r.alpha = 0f
         r.scaleX = 0.7f
@@ -458,6 +460,8 @@ class IslandOverlay(
     private fun buildViews(): IslandRoot {
         val c = context
         val r = IslandRoot(c)
+        // Ruang kosong di kiri-kanan supaya kartu yang ikut bergeser saat disapu mendatar tidak terpotong jendela.
+        r.setPadding(dp(SWIPE_PAD_DP), 0, dp(SWIPE_PAD_DP), 0)
         val cd = IslandCard(c)
 
         // ---- mini
@@ -612,6 +616,12 @@ class IslandOverlay(
         handle = hd
         cd.dragEnabled = { expanded }
         cd.onSwipeAway = { collapse() }
+        // Sapuan mendatar: kanan = lagu sebelumnya, kiri = lagu berikutnya; kalau tidak ada, kartu hanya bergetar sedikit.
+        cd.maxShift = dp(SWIPE_PAD_DP - 2).toFloat()
+        cd.canSwipePrev = { player.hasPreviousMediaItem() }
+        cd.canSwipeNext = { player.hasNextMediaItem() }
+        cd.onSwipePrev = { safe { player.seekToPreviousMediaItem() } }
+        cd.onSwipeNext = { safe { player.seekToNextMediaItem() } }
         // Kartu kecil disapu kasar: ke atas = tutup island, ke bawah = buka kartu besar.
         val closeIsland = {
             safe {
@@ -903,10 +913,13 @@ class IslandOverlay(
         }
         scope.launch {
             val p = runCatching { PaletteExtractor.load(context, url) }.getOrNull()
+            val blurred = runCatching { PaletteExtractor.loadBlurred(context, url) }.getOrNull()
             if (artUrl == url && root != null) {
                 safe {
                     palette = p ?: SongPalette.Default
+                    glassBmp = blurred
                     applyPalette(palette)
+                    applyGlassArt()
                 }
             }
         }
@@ -942,6 +955,7 @@ class IslandOverlay(
         card?.alpha = opacity.value
         applyTextSize()
         applyPalette(palette)
+        applyGlassArt()
     }
 
     /** Latar kartu mengikuti gaya; aksen seek bar & equalizer dari warna cover. */
@@ -956,20 +970,23 @@ class IslandOverlay(
         bigEq?.color = accent
     }
 
-    /** True kalau gaya Kaca aktif dan sistem mengizinkan blur antar jendela (Android 12+, bukan hemat daya). */
-    private fun blurActive(): Boolean =
-        style.value == IslandStyle.Glass && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
-            runCatching { wm.isCrossWindowBlurEnabled }.getOrDefault(false)
+    /**
+     * True kalau gaya Kaca aktif. Blurnya buatan Olyuno sendiri (sampul lagu yang diburamkan di dalam kartu,
+     * lihat [applyGlassArt]); TIDAK memakai blur jendela sistem HP, jadi tampilannya sama di semua HP.
+     */
+    private fun blurActive(): Boolean = style.value == IslandStyle.Glass
 
-    /** Gaya Kaca: minta sistem mengaburkan isi di belakang jendela island. */
-    private fun applyWindowBlur() {
-        val r = root ?: return
-        val lp = r.layoutParams as? WindowManager.LayoutParams ?: return
-        val on = blurActive()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) lp.blurBehindRadius = if (on) dp(28) else 0
-        lp.flags = if (on) lp.flags or WindowManager.LayoutParams.FLAG_BLUR_BEHIND
-        else lp.flags and WindowManager.LayoutParams.FLAG_BLUR_BEHIND.inv()
-        runCatching { wm.updateViewLayout(r, lp) }
+    /** Isi kaca: sampul yang diburamkan digambar di dalam kartu (hanya untuk gaya Kaca). */
+    private fun applyGlassArt() {
+        val l = look
+        val glass = l is Look.Glass || (l is Look.Tint && l.glass)
+        val bmp = if (glass) glassBmp else null
+        card?.glassArt = bmp
+        card?.glassArtAlpha = when {
+            l is Look.Glass && l.dark -> 0.50f
+            l is Look.Glass -> 0.40f
+            else -> 0.30f
+        }
     }
 
     // =================================================================== aksi
@@ -993,6 +1010,10 @@ class IslandOverlay(
     }
 
     // =================================================================== util
+
+    private companion object {
+        const val SWIPE_PAD_DP = 16
+    }
 
     private fun dp(v: Int): Int = (v * density + 0.5f).toInt()
     private fun dp(v: Float): Int = (v * density + 0.5f).toInt()
@@ -1070,8 +1091,10 @@ internal fun islandBackground(l: Look, p: SongPalette): Pair<Int, Int> = when (l
     )
     is Look.Glass -> {
         val base = if (l.dark) Color.BLACK else Color.WHITE
-        val mix = if (l.dark) 0.55f else 0.78f
-        val a = if (l.dark) (if (l.blur) 0x8C else 0xE0) else (if (l.blur) 0x99 else 0xEB)
+        // Latar di belakang island tidak diketahui (bisa hitam atau putih), jadi alpha dibuat cukup tebal
+        // supaya teks tetap kontras di keduanya; blur tetap terlihat lewat sisa transparansinya.
+        val mix = if (l.dark) 0.6f else 0.86f
+        val a = if (l.dark) (if (l.blur) 0xBC else 0xE6) else (if (l.blur) 0xDC else 0xF2)
         Pair(
             ColorUtils.setAlphaComponent(ColorUtils.blendARGB(p.top.toArgb(), base, mix), a),
             ColorUtils.setAlphaComponent(ColorUtils.blendARGB(p.bottom.toArgb(), base, mix + 0.1f), a),
@@ -1157,6 +1180,30 @@ private class IslandCard(ctx: Context) : FrameLayout(ctx) {
         invalidate()
     }
 
+    /** Sampul yang sudah diburamkan (gaya Kaca); digambar di atas latar, di bawah isi kartu. */
+    var glassArt: Bitmap? = null
+        set(v) {
+            if (field === v) return
+            field = v
+            invalidate()
+        }
+    var glassArtAlpha: Float = 0.4f
+        set(v) {
+            field = v
+            invalidate()
+        }
+    private val artPaint = Paint(Paint.FILTER_BITMAP_FLAG)
+    private val artDst = Rect()
+
+    override fun dispatchDraw(canvas: Canvas) {
+        glassArt?.let { b ->
+            artPaint.alpha = (glassArtAlpha * 255f).toInt().coerceIn(0, 255)
+            artDst.set(0, 0, width, height)
+            canvas.drawBitmap(b, null, artDst, artPaint)
+        }
+        super.dispatchDraw(canvas)
+    }
+
     var radius: Float = 0f
         set(v) {
             field = v
@@ -1176,6 +1223,34 @@ private class IslandCard(ctx: Context) : FrameLayout(ctx) {
     /** Dipanggil saat kartu besar digeser ke atas / kiri / kanan: kartu mengecil. */
     var onSwipeAway: (() -> Unit)? = null
     private var dismissed = false
+
+    /** Sapuan mendatar: kanan = lagu sebelumnya, kiri = lagu berikutnya. Kartu ikut bergeser sedikit mengikuti jari. */
+    var canSwipePrev: () -> Boolean = { true }
+    var canSwipeNext: () -> Boolean = { true }
+    var onSwipePrev: (() -> Unit)? = null
+    var onSwipeNext: (() -> Unit)? = null
+
+    /** Geser maksimum kartu (px) saat disapu mendatar. */
+    var maxShift = 0f
+    private var hSwiping = false
+    private var downRawX = 0f
+
+    private fun hDrag(dx: Float) {
+        val allowed = if (dx > 0f) canSwipePrev() else canSwipeNext()
+        // Tidak ada lagu di arah itu: kartu hanya bergetar sedikit (tertahan).
+        val shift = if (allowed) dx * 0.5f else dx * 0.15f
+        val cap = if (allowed) maxShift else maxShift * 0.5f
+        translationX = shift.coerceIn(-cap, cap)
+    }
+
+    private fun hEnd(dx: Float) {
+        val allowed = if (dx > 0f) canSwipePrev() else canSwipeNext()
+        animate().cancel()
+        animate().translationX(0f).setDuration(260).setInterpolator(OvershootInterpolator(1.6f)).start()
+        if (allowed && abs(dx) >= 40f * resources.displayMetrics.density) {
+            if (dx > 0f) onSwipePrev?.invoke() else onSwipeNext?.invoke()
+        }
+    }
 
     /** Kartu kecil disapu cepat (kasar) ke atas / ke bawah. */
     var onMiniFlingUp: (() -> Unit)? = null
@@ -1219,17 +1294,22 @@ private class IslandCard(ctx: Context) : FrameLayout(ctx) {
         return handled
     }
 
-    /** 0 = belum jelas, 1 = tarik ke bawah, 2 = geser ke atas / samping. */
+    /** 0 = belum jelas, 1 = tarik ke bawah, 2 = geser ke atas, 3 = sapuan vertikal kartu kecil, 4 = sapuan mendatar (ganti lagu). */
     private fun classify(e: MotionEvent): Int {
         val dx = e.x - downX
         val dy = e.y - downY
         if (!dragEnabled()) {
-            // Kartu kecil: sapuan vertikal ditangkap di sini (tidak jadi ketukan).
-            return if (abs(dy) > slop && abs(dy) > abs(dx)) 3 else 0
+            // Kartu kecil: sapuan vertikal (3) dan mendatar (4) ditangkap di sini (tidak jadi ketukan).
+            return when {
+                abs(dy) > slop && abs(dy) > abs(dx) -> 3
+                abs(dx) > slop && abs(dx) > abs(dy) -> 4
+                else -> 0
+            }
         }
         return when {
             dy > slop && dy > abs(dx) -> 1
-            (-dy > slop && -dy > abs(dx)) || (abs(dx) > slop && abs(dx) > abs(dy)) -> 2
+            -dy > slop && -dy > abs(dx) -> 2
+            abs(dx) > slop && abs(dx) > abs(dy) -> 4
             else -> 0
         }
     }
@@ -1239,10 +1319,12 @@ private class IslandCard(ctx: Context) : FrameLayout(ctx) {
             MotionEvent.ACTION_DOWN -> {
                 downX = e.x
                 downY = e.y
+                downRawX = e.rawX
                 pulling = false
                 dismissed = false
+                hSwiping = false
             }
-            MotionEvent.ACTION_MOVE -> if (!pulling && !dismissed && !miniSwiping) {
+            MotionEvent.ACTION_MOVE -> if (!pulling && !dismissed && !miniSwiping && !hSwiping) {
                 when (classify(e)) {
                     1 -> pulling = true
                     2 -> {
@@ -1251,10 +1333,11 @@ private class IslandCard(ctx: Context) : FrameLayout(ctx) {
                         onSwipeAway?.invoke()
                     }
                     3 -> miniSwiping = true
+                    4 -> hSwiping = true
                 }
             }
         }
-        return pulling || dismissed || miniSwiping
+        return pulling || dismissed || miniSwiping || hSwiping
     }
 
     override fun onTouchEvent(e: MotionEvent): Boolean {
@@ -1262,10 +1345,12 @@ private class IslandCard(ctx: Context) : FrameLayout(ctx) {
             MotionEvent.ACTION_DOWN -> {
                 downX = e.x
                 downY = e.y
+                downRawX = e.rawX
                 pulling = false
                 dismissed = false
+                hSwiping = false
             }
-            MotionEvent.ACTION_MOVE -> if (!pulling && !dismissed && !miniSwiping) {
+            MotionEvent.ACTION_MOVE -> if (!pulling && !dismissed && !miniSwiping && !hSwiping) {
                 val k = classify(e)
                 if (k != 0) {
                     // Batalkan "klik" yang sedang menunggu supaya gerakan ini tidak ikut jadi ketukan.
@@ -1276,6 +1361,7 @@ private class IslandCard(ctx: Context) : FrameLayout(ctx) {
                     when (k) {
                         1 -> pulling = true
                         3 -> miniSwiping = true
+                        4 -> hSwiping = true
                         else -> {
                             dismissed = true
                             bigSwiped = true
@@ -1284,6 +1370,20 @@ private class IslandCard(ctx: Context) : FrameLayout(ctx) {
                     }
                 }
             }
+        }
+        if (hSwiping) {
+            when (e.actionMasked) {
+                MotionEvent.ACTION_MOVE -> hDrag(e.rawX - downRawX)
+                MotionEvent.ACTION_UP -> {
+                    hSwiping = false
+                    hEnd(e.rawX - downRawX)
+                }
+                MotionEvent.ACTION_CANCEL -> {
+                    hSwiping = false
+                    hEnd(0f)
+                }
+            }
+            return true
         }
         if (miniSwiping) return true
         if (dismissed) {
