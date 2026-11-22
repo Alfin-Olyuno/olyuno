@@ -113,7 +113,7 @@ fun MoodScreen(
                     ) {
                         item(key = "h_songs") { MoodSectionTitle(t("Lagu")) }
                         item(key = "songs") {
-                            MoodRows {
+                            MoodRows(songs.size) {
                                 gridItems(songs, key = { "s_" + it.videoId }) { song ->
                                     Box(Modifier.width(MOOD_CARD_WIDTH)) {
                                         MoodSongCard(
@@ -129,7 +129,7 @@ fun MoodScreen(
                         if (playlists.isNotEmpty()) {
                             item(key = "h_playlists") { MoodSectionTitle(t("Playlist")) }
                             item(key = "playlists") {
-                                MoodRows {
+                                MoodRows(playlists.size) {
                                     gridItems(playlists, key = { "p_" + it.key }) { pl ->
                                         Box(Modifier.width(MOOD_CARD_WIDTH)) {
                                             MoodPlaylistCard(pl) { vm.openCollection(pl) }
@@ -156,10 +156,12 @@ private fun MoodSectionTitle(text: String) {
 
 /** Dua baris kartu yang tumbuh ke kanan; digeser bila layar tidak cukup. */
 @Composable
-private fun MoodRows(content: androidx.compose.foundation.lazy.grid.LazyGridScope.() -> Unit) {
+private fun MoodRows(count: Int, content: androidx.compose.foundation.lazy.grid.LazyGridScope.() -> Unit) {
+    // Jumlah baris mengikuti jumlah kartu (maks. 2): satu kartu = satu baris, tanpa ruang kosong.
+    val rows = count.coerceIn(1, 2)
     LazyHorizontalGrid(
-        rows = GridCells.Fixed(2),
-        modifier = Modifier.fillMaxWidth().height(MOOD_CARD_HEIGHT * 2 + 8.dp),
+        rows = GridCells.Fixed(rows),
+        modifier = Modifier.fillMaxWidth().height(MOOD_CARD_HEIGHT * rows + 8.dp * (rows - 1)),
         contentPadding = PaddingValues(horizontal = 12.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -259,13 +261,10 @@ private fun MoodSongCard(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        DropdownMenu(
-            expanded = menuOpen,
-            onDismissRequest = { menuOpen = false },
-            containerColor = glassMenuColor(),
-            border = glassEdge(),
-        ) {
-            SongMenu(vm, song) { menuOpen = false }
+        if (menuOpen) {
+            SongMenuSheet(song = song, onDismiss = { menuOpen = false }) { dismiss ->
+                SongMenu(vm, song, dismiss)
+            }
         }
     }
 }

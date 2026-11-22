@@ -1103,20 +1103,27 @@ private fun ControlsRow(vm: MainViewModel, state: PlayerState) {
             animationSpec = smoothSpec(androidx.compose.animation.core.tween(if (playPressed) 90 else 260)),
             label = "playPressGlow",
         )
+        // Warna tampilan Hitam / Putih / Kustom: tombol diberi bulatan penuh (lihat playCircleColors); Ikuti sistem tanpa bulatan.
+        val circleColors = playCircleColors()
         IconButton(
             onClick = vm::togglePlay,
             interactionSource = playSource,
             modifier = Modifier
                 .size(72.dp)
                 .pressScale(playSource, 0.92f)
-                .background(Color.White.copy(alpha = pressGlow), CircleShape),
+                .background(
+                    circleColors?.circle ?: Color.White.copy(alpha = pressGlow),
+                    CircleShape,
+                ),
         ) {
             if (state.isBuffering) {
                 ShimmerBox(
                     Modifier.size(34.dp),
                     CircleShape,
-                    Color.White,
+                    circleColors?.icon ?: Color.White,
                 )
+            } else if (circleColors != null) {
+                PlayPauseIcon(state.isPlaying, Modifier.size(40.dp), tint = circleColors.icon)
             } else {
                 PlayPauseIcon(state.isPlaying, Modifier.size(48.dp))
             }

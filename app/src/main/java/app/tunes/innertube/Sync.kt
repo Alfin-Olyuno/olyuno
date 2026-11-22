@@ -8,6 +8,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import kotlin.random.Random
 import app.tunes.i18n.t
 
@@ -79,6 +80,9 @@ suspend fun InnerTube.registerPlayback(cookie: String, videoId: String) {
     val headers = authHeaders(cookie) ?: return
     val root = post(Clients.WEB_REMIX, "player", headers) { put("videoId", videoId) }
     val base = root.path("playbackTracking", "videostatsPlaybackUrl", "baseUrl").text ?: return
+    // Cookie dan Authorization ikut terkirim, jadi URL dari respons hanya dipakai kalau https ke domain YouTube.
+    val target = base.toHttpUrlOrNull() ?: return
+    if (!target.isHttps || !(target.host == "youtube.com" || target.host.endsWith(".youtube.com"))) return
     val cpn = (1..16).map { CPN_ALPHABET[Random.nextInt(CPN_ALPHABET.length)] }.joinToString("")
     val sep = if (base.contains('?')) '&' else '?'
     getStatus("$base${sep}ver=2&c=WEB_REMIX&cpn=$cpn", headers, Clients.WEB_REMIX.userAgent)

@@ -286,7 +286,7 @@ fun StoragePage(
     if (showDeleteDownloads) {
         ConfirmDeleteDialog(
             title = t("Hapus semua unduhan?"),
-            message = t("Semua lagu dan paket yang diunduh akan dihapus dari perangkat. Unduh lagi untuk memutarnya offline."),
+            message = t("Semua unduhan dihapus dari perangkat."),
             onConfirm = {
                 showDeleteDownloads = false
                 run("downloads", t("Semua unduhan dihapus")) { storage.removeAllDownloads() }
@@ -298,7 +298,7 @@ fun StoragePage(
     if (showDeleteHistory) {
         ConfirmDeleteDialog(
             title = t("Hapus riwayat putar?"),
-            message = t("Daftar Terakhir dilihat, jumlah putar, dan statistik akan dihapus. Lagu yang disukai tetap ada."),
+            message = t("Riwayat, jumlah putar, dan statistik dihapus. Lagu Disukai tetap ada."),
             onConfirm = {
                 showDeleteHistory = false
                 run("history", t("Riwayat putar dihapus")) { vm.clearHistory() }

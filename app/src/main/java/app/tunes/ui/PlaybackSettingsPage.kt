@@ -95,7 +95,7 @@ fun PlaybackSettingsPage(
                 SwitchMenuRow(
                     leading = { Icon(Icons.Rounded.History, contentDescription = null, modifier = Modifier.size(24.dp)) },
                     label = t("Lanjutkan terakhir diputar"),
-                    description = t("Saat aplikasi dibuka lagi, antrean dan posisi lagu terakhir kembali seperti tadi."),
+                    description = t("Antrean dan posisi lagu kembali seperti terakhir kamu buka."),
                     checked = resumeLast,
                     onChange = vm::setResumeLast,
                 )
@@ -147,7 +147,7 @@ fun PlaybackSettingsPage(
                 SwitchMenuRow(
                     leading = { Icon(Icons.Rounded.DataSaverOn, contentDescription = null, modifier = Modifier.size(24.dp)) },
                     label = t("Hemat data"),
-                    description = t("Menurunkan kualitas audio ke rendah dan mematikan fitur yang banyak memakai data, supaya kuota lebih awet."),
+                    description = t("Kualitas audio rendah dan fitur boros data dimatikan."),
                     checked = dataSaver,
                     onChange = { on -> if (on) showDataSaver = true else vm.setDataSaver(false) },
                 )
@@ -199,7 +199,7 @@ fun PlaybackSettingsPage(
                 SwitchMenuRow(
                     leading = { Icon(Icons.Rounded.Headphones, contentDescription = null, modifier = Modifier.size(24.dp)) },
                     label = t("Lanjut saat headset tersambung"),
-                    description = t("Musik yang berhenti karena headset terputus lanjut sendiri kalau tersambung lagi dalam 10 menit."),
+                    description = t("Lanjut putar otomatis jika headset tersambung lagi dalam 10 menit."),
                     checked = resumeOnHeadset,
                     onChange = vm::setResumeOnHeadset,
                 )
@@ -352,8 +352,8 @@ private fun DataSaverDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
                     modifier = Modifier.padding(bottom = 10.dp),
                 )
                 listOf(
-                    t("Kualitas audio dikunci ke Rendah (pilihanmu kembali saat Hemat data dimatikan)"),
-                    t("Putar otomatis berhenti: tidak mengambil lagu serupa saat antrean habis"),
+                    t("Kualitas audio dikunci Rendah"),
+                    t("Putar otomatis dimatikan"),
                     t("Terjemahan lirik dimatikan"),
                     t("Unduhan hanya lewat Wi-Fi, bukan data seluler"),
                 ).forEach { line ->
@@ -428,7 +428,7 @@ private fun SpeedDialog(
                     Column(Modifier.weight(1f)) {
                         Text(t("Jaga nada"), style = MaterialTheme.typography.titleMedium)
                         Text(
-                            t("Suara tidak jadi cempreng atau berat saat dipercepat atau diperlambat."),
+                            t("Nada tidak berubah saat kecepatan diubah."),
                             style = MaterialTheme.typography.bodySmall,
                             color = scheme.onSurfaceVariant,
                         )

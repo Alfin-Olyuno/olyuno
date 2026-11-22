@@ -52,6 +52,8 @@ fun NavTabItem(
     badgeCount: Int = 0,
 ) {
     val colors = MaterialTheme.colorScheme
+    // Kapsul abu-abu transparan; ikon + nama tab terpilih: Hitam = putih, Putih = hitam, Kustom = warna aksen (null = Ikuti sistem, bawaan).
+    val inverted = playCircleColors()
     // Animasi smooth mati: kapsul, ikon, dan warna langsung berpindah tanpa gerak.
     val smooth = LocalSmoothAnim.current
     val pill by animateFloatAsState(
@@ -65,7 +67,7 @@ fun NavTabItem(
         label = "navIconScale",
     )
     val contentColor by animateColorAsState(
-        targetValue = if (selected) colors.onSecondaryContainer else colors.onSurfaceVariant,
+        targetValue = if (selected) (inverted?.circle ?: colors.onSecondaryContainer) else colors.onSurfaceVariant,
         animationSpec = if (smooth) tween(180) else snap(),
         label = "navTabColor",
     )
@@ -94,7 +96,7 @@ fun NavTabItem(
                     scaleY = sc
                     alpha = pill.coerceIn(0f, 1f)
                 }
-                .background(colors.secondaryContainer, RoundedCornerShape(30.dp)),
+                .background(if (inverted != null) colors.onSurface.copy(alpha = 0.16f) else colors.secondaryContainer, RoundedCornerShape(30.dp)),
         )
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             BadgedBox(badge = { if (badgeCount > 0) Badge { Text(badgeCount.toString()) } }) {

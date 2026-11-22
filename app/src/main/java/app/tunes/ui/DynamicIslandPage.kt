@@ -420,7 +420,7 @@ fun DynamicIslandPage(
                     onReset = { vm.setIslandPauseHideSec(IslandPrefsStore.DEFAULT_PAUSE_HIDE_SEC, true) },
                     enabled = islandOnlyWhenPlaying,
                     onDisabledClick = {
-                        Toast.makeText(context, t("Nyalakan Tampilkan kartu hanya saat diputar"), Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, t("Aktifkan dulu \"Tampilkan kartu hanya saat diputar\""), Toast.LENGTH_SHORT).show()
                     },
                 )
                 MenuDivider()

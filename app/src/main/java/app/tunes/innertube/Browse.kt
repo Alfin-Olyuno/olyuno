@@ -71,6 +71,28 @@ internal suspend fun InnerTube.browse(
 
 // ------------------------------------------------------------- search
 
+/** Filter "Songs" milik pencarian YouTube Music: hanya rekaman lagu resmi, tanpa video kompilasi / unggahan pengguna. */
+private const val SONGS_FILTER_PARAMS = "EgWKAQIIAWoMEA4QChADEAQQCRAF"
+
+/** Batas durasi lagu untuk daftar rekomendasi: video yang lebih panjang hampir pasti kompilasi / mix. */
+private const val MAX_SONG_SECONDS = 12 * 60
+
+private val COMPILATION_TITLE = Regex(
+    "top hits|top lagu|playlist|compilation|kompilasi|full album|non-?stop|jedag|terbaik 20|hits 20|" +
+        "lagu (santai|viral|pop|galau|trending|terbaru)\\b.*20\\d\\d|\\b20\\d\\d\\b.*(viral|trending|hits)\\b",
+    RegexOption.IGNORE_CASE,
+)
+
+/** Kolom artis berisi tanggal unggah ("Aug 20, 2024" / "20 Agu 2024"): tanda baris itu video, bukan lagu. */
+private val DATE_ARTIST = Regex("^\\p{L}{3,9}\\.? \\d{1,2}, \\d{4}$|^\\d{1,2} \\p{L}{3,9}\\.? \\d{4}$")
+
+/** true kalau [this] kemungkinan besar video kompilasi / mix, bukan satu lagu. */
+internal fun SongItem.looksLikeCompilation(): Boolean =
+    durationSec > MAX_SONG_SECONDS || DATE_ARTIST.matches(artist.trim()) || COMPILATION_TITLE.containsMatchIn(title)
+
+/** Buang video kompilasi dari daftar rekomendasi (Beranda, Genre, Mood). Bukan untuk halaman Cari / artis / playlist. */
+internal fun List<SongItem>.musicOnly(): List<SongItem> = filterNot { it.looksLikeCompilation() }
+
 private fun InnerTube.parseHit(item: JsonObject): SearchHit? {
     val title = item.flexRuns(0).joined()
     if (title.isBlank()) return null
@@ -217,7 +239,7 @@ internal fun InnerTube.collectSongs(
 suspend fun InnerTube.quickPicks(seedVideoId: String?): List<SongItem> {
     if (seedVideoId != null) {
         try {
-            val radio = radio(seedVideoId).filter { it.videoId != seedVideoId }
+            val radio = radio(seedVideoId).filter { it.videoId != seedVideoId }.musicOnly()
             if (radio.size >= 4) return radio
         } catch (e: CancellationException) {
             throw e
@@ -238,15 +260,14 @@ suspend fun InnerTube.quickPicks(seedVideoId: String?): List<SongItem> {
         } else {
             shelves.map { collectSongs(it, includeTwoRow = true) }.firstOrNull { it.size >= 4 }.orEmpty()
         }
-        if (songs.isNotEmpty()) return songs
+        val clean = songs.musicOnly()
+        if (clean.isNotEmpty()) return clean
     } catch (e: CancellationException) {
         throw e
     } catch (e: Exception) {
         // lanjut ke cadangan
     }
-    return searchAll("lagu populer indonesia").let { r ->
-        (r.top.filterIsInstance<SearchHit.Track>().map { it.song } + r.songs).distinctBy { it.videoId }
-    }
+    return searchSongsOnly("lagu populer indonesia")
 }
 
 // ------------------------------------------------------- Sedang trending
@@ -263,13 +284,15 @@ suspend fun InnerTube.trendingSongs(): List<SongItem> {
             "header", "musicCarouselShelfBasicHeaderRenderer", "title", "runs", 0, "text",
         ).text.orEmpty()
 
-        val keys = listOf("trending", "top song", "lagu teratas", "teratas", "tren")
-        val shelf = shelves.firstOrNull { sh -> titleOf(sh).let { t -> keys.any { t.contains(it, ignoreCase = true) } } }
-        val songs = if (shelf != null) {
+        // Tangga lagu dulu ("Top songs"); rak bertema video ("Trending" / "Top music videos") sering berisi kompilasi.
+        val keys = listOf("top song", "lagu teratas", "trending", "tren")
+        val candidates = shelves.filterNot { titleOf(it).contains("video", ignoreCase = true) }
+        val shelf = keys.firstNotNullOfOrNull { k -> candidates.firstOrNull { titleOf(it).contains(k, ignoreCase = true) } }
+        val songs = (if (shelf != null) {
             collectSongs(shelf, includeTwoRow = true)
         } else {
-            shelves.map { collectSongs(it, includeTwoRow = true) }.firstOrNull { it.size >= 4 }.orEmpty()
-        }
+            candidates.map { collectSongs(it, includeTwoRow = true).musicOnly() }.firstOrNull { it.size >= 4 }.orEmpty()
+        }).musicOnly()
         if (songs.size >= 4) return songs.take(MAX_TRENDING)
     } catch (e: CancellationException) {
         throw e
@@ -345,7 +368,7 @@ private suspend fun InnerTube.genreSongs(ref: CollectionRef): List<SongItem> {
     val longest = fromPlaylists.maxOfOrNull { it.size } ?: 0
     for (i in 0 until longest) fromPlaylists.forEach { l -> l.getOrNull(i)?.let(mixed::add) }
 
-    return (direct + mixed).distinctBy { it.videoId }.take(MAX_COLLECTION_SONGS)
+    return (direct + mixed).distinctBy { it.videoId }.musicOnly().take(MAX_COLLECTION_SONGS)
 }
 
 // ------------------------------------------------------ Genre cepat (mood)
@@ -373,7 +396,7 @@ private suspend fun InnerTube.moodData(ref: CollectionRef): CollectionData {
         queries.map { q ->
             async {
                 try {
-                    searchAll(q)
+                    searchAll(q) to searchSongsOnly(q)
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
@@ -388,10 +411,8 @@ private suspend fun InnerTube.moodData(ref: CollectionRef): CollectionData {
         for (i in 0 until longest) lists.forEach { l -> l.getOrNull(i)?.let(mixed::add) }
         return mixed
     }
-    val songs = interleave(
-        results.map { r -> (r.top.filterIsInstance<SearchHit.Track>().map { it.song } + r.songs).distinctBy { it.videoId } },
-    ).distinctBy { it.videoId }
-    val playlists = interleave(results.map { it.playlists })
+    val songs = interleave(results.map { (_, onlySongs) -> onlySongs }).distinctBy { it.videoId }
+    val playlists = interleave(results.map { (all, _) -> all.playlists })
         .distinctBy { it.key }
         .take(MAX_MOOD_PLAYLISTS)
     return CollectionData(songs, playlists = playlists)
@@ -484,6 +505,26 @@ suspend fun InnerTube.loadCollection(ref: CollectionRef): CollectionData {
 }
 
 /** Cari halaman artis YouTube Music untuk [name]; hanya yang namanya sama persis (tanpa beda huruf besar/kecil). */
+/** Pencarian khusus lagu (filter Songs). Bila server menolak filter / hasilnya kosong, pakai pencarian biasa lalu disaring. */
+private suspend fun InnerTube.searchSongsOnly(query: String): List<SongItem> {
+    try {
+        val root = post(Clients.WEB_REMIX, "search") {
+            put("query", query)
+            put("params", SONGS_FILTER_PARAMS)
+        }
+        val songs = root.findAll("musicResponsiveListItemRenderer")
+            .mapNotNull { (parseHit(it) as? SearchHit.Track)?.song }
+            .distinctBy { it.videoId }
+        if (songs.isNotEmpty()) return songs.musicOnly()
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        // jatuh ke pencarian biasa
+    }
+    val r = searchAll(query)
+    return (r.top.filterIsInstance<SearchHit.Track>().map { it.song } + r.songs).distinctBy { it.videoId }.musicOnly()
+}
+
 private suspend fun InnerTube.resolveArtist(name: String): CollectionRef? {
     val q = name.trim()
     val r = searchAll(q)
@@ -493,7 +534,4 @@ private suspend fun InnerTube.resolveArtist(name: String): CollectionRef? {
         .firstOrNull { it.title.trim().equals(q, ignoreCase = true) }
 }
 
-private suspend fun InnerTube.querySongs(q: String): List<SongItem> {
-    val r = searchAll(q)
-    return (r.top.filterIsInstance<SearchHit.Track>().map { it.song } + r.songs).distinctBy { it.videoId }
-}
+private suspend fun InnerTube.querySongs(q: String): List<SongItem> = searchSongsOnly(q)

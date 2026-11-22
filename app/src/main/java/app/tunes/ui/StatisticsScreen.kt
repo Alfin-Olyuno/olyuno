@@ -378,8 +378,9 @@ private fun StatChip(
     trailing: (@Composable (tint: Color) -> Unit)? = null,
 ) {
     val colors = MaterialTheme.colorScheme
-    val container = if (selected) colors.primaryContainer else colors.surfaceContainerHigh
-    val content = if (selected) colors.onPrimaryContainer else colors.onSurface
+    val inverted = playCircleColors()
+    val container = if (selected) (inverted?.circle ?: colors.primaryContainer) else colors.surfaceContainerHigh
+    val content = if (selected) (inverted?.icon ?: colors.onPrimaryContainer) else colors.onSurface
     Row(
         modifier = Modifier
             .clip(RoundedCornerShape(12.dp))

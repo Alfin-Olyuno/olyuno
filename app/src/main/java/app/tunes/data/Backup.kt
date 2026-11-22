@@ -25,6 +25,26 @@ object Backup {
     private const val APP = "olyuno"
     private const val VERSION = 1
 
+    // Batas supaya file cadangan rusak / berbahaya tidak menghabiskan memori atau database.
+    private const val MAX_SONGS = 50_000
+    private const val MAX_PLAYS = 200_000
+    private const val MAX_PLAYLISTS = 1_000
+    private const val MAX_PLAYLIST_SONGS = 10_000
+    private const val MAX_SEARCHES = 1_000
+
+    /** Ukuran maksimum file cadangan yang dibaca (byte). */
+    const val MAX_FILE_BYTES = 32L * 1024 * 1024
+
+    /** Id lagu: id YouTube atau lagu perangkat ("local:123"); selain itu ditolak. */
+    private val SAFE_ID = Regex("^[A-Za-z0-9_:.-]{1,64}$")
+
+    /** Sampul hanya dari https atau album art perangkat; URL lain (http, file:, dll.) dibuang. */
+    private fun safeThumb(s: String?): String? =
+        s?.takeIf { it.startsWith("https://") || it.startsWith("content://media/external/audio/") }
+
+    private fun JSONObject.thumb(key: String): String? =
+        if (isNull(key)) null else safeThumb(optString(key).ifBlank { null })
+
     fun toJson(data: BackupData): String {
         val songs = JSONArray()
         data.songs.forEach { s ->
@@ -103,15 +123,16 @@ object Backup {
 
         val songs = ArrayList<SongEntity>()
         for (i in 0 until arr.length()) {
+            if (songs.size >= MAX_SONGS) break
             val o = arr.optJSONObject(i) ?: continue
             val id = o.optString("videoId").trim()
-            if (id.isEmpty()) continue
+            if (!SAFE_ID.matches(id)) continue
             songs += SongEntity(
                 videoId = id,
                 title = o.optString("title"),
                 artist = o.optString("artist"),
                 durationSec = o.optInt("durationSec", 0).coerceAtLeast(0),
-                thumbnail = if (o.isNull("thumbnail")) null else o.optString("thumbnail").ifBlank { null },
+                thumbnail = o.thumb("thumbnail"),
                 liked = o.optBoolean("liked", false),
                 likedAt = o.optLong("likedAt", 0).coerceAtLeast(0),
                 lastPlayedAt = o.optLong("lastPlayedAt", 0).coerceAtLeast(0),
@@ -120,16 +141,17 @@ object Backup {
         }
 
         val sa = root.optJSONArray("searchHistory")
-        val searches = if (sa == null) emptyList() else List(sa.length()) { sa.optString(it) }.filter { it.isNotBlank() }
+        val searches = if (sa == null) emptyList() else List(minOf(sa.length(), MAX_SEARCHES)) { sa.optString(it) }.filter { it.isNotBlank() }
         // Log putaran bersifat opsional: cadangan lama tidak punya.
         val pa = root.optJSONArray("plays")
         val plays = ArrayList<PlayEntity>()
         if (pa != null) {
             for (i in 0 until pa.length()) {
+                if (plays.size >= MAX_PLAYS) break
                 val o = pa.optJSONObject(i) ?: continue
                 val id = o.optString("videoId").trim()
                 val at = o.optLong("playedAt", 0)
-                if (id.isEmpty() || at <= 0) continue
+                if (!SAFE_ID.matches(id) || at <= 0) continue
                 fun str(key: String): String? = if (o.isNull(key)) null else o.optString(key).ifBlank { null }
                 plays += PlayEntity(
                     videoId = id,
@@ -138,7 +160,7 @@ object Backup {
                     ctxTitle = str("ctxTitle"),
                     ctxBrowseId = str("ctxBrowseId"),
                     ctxParams = str("ctxParams"),
-                    ctxThumb = str("ctxThumb"),
+                    ctxThumb = o.thumb("ctxThumb"),
                 )
             }
         }
@@ -147,6 +169,7 @@ object Backup {
         val playlists = ArrayList<BackupPlaylist>()
         if (pl != null) {
             for (i in 0 until pl.length()) {
+                if (playlists.size >= MAX_PLAYLISTS) break
                 val o = pl.optJSONObject(i) ?: continue
                 val name = o.optString("name").trim()
                 if (name.isEmpty()) continue
@@ -154,15 +177,16 @@ object Backup {
                 val items = ArrayList<SongItem>()
                 if (sa2 != null) {
                     for (k in 0 until sa2.length()) {
+                        if (items.size >= MAX_PLAYLIST_SONGS) break
                         val so = sa2.optJSONObject(k) ?: continue
                         val id = so.optString("videoId").trim()
-                        if (id.isEmpty()) continue
+                        if (!SAFE_ID.matches(id)) continue
                         items += SongItem(
                             videoId = id,
                             title = so.optString("title"),
                             artist = so.optString("artist"),
                             durationSec = so.optInt("durationSec", 0).coerceAtLeast(0),
-                            thumbnail = if (so.isNull("thumbnail")) null else so.optString("thumbnail").ifBlank { null },
+                            thumbnail = so.thumb("thumbnail"),
                         )
                     }
                 }

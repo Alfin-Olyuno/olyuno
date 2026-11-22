@@ -15,6 +15,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.BlurEffect
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.TileMode
@@ -42,6 +44,9 @@ class GlassConfig(val enabled: Boolean, val backdrop: GlassBackdrop?)
 class GlassBackdrop(val layer: GraphicsLayer) {
     var origin by mutableStateOf(Offset.Zero)
 }
+
+/** Kejenuhan warna isi yang diblur di dalam kaca (1 = asli, 0 = abu-abu). Kecil = warna tidak menempel di kaca. */
+const val GLASS_BACKDROP_SATURATION = 0.25f
 
 val LocalGlass = compositionLocalOf { GlassConfig(enabled = false, backdrop = null) }
 
@@ -81,6 +86,9 @@ fun Modifier.glass(
     val blurLayer = rememberGraphicsLayer()
     remember(blurLayer, blurPx) {
         blurLayer.renderEffect = BlurEffect(blurPx, blurPx, TileMode.Clamp)
+        // Warna isi di belakang (sampul, kartu berwarna) dipucatkan sebelum masuk kaca, supaya tidak ada
+        // bercak warna yang "menempel" di bilah / kartu kaca. Bentuk dan terang-gelapnya tetap terlihat.
+        blurLayer.colorFilter = ColorFilter.colorMatrix(ColorMatrix().apply { setToSaturation(GLASS_BACKDROP_SATURATION) })
     }
     val pageBg = MaterialTheme.colorScheme.background
     val pageTint = LocalTopTint.current

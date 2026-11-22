@@ -16,7 +16,7 @@ enum class ColorMode(val label: String) {
 /** Gaya tampilan: Biasa (solid, seperti sebelumnya) atau Kaca (bilah & kontrol transparan dengan blur). */
 enum class UiStyle(val label: String, val description: String) {
     Normal("Biasa", "Bilah navigasi dan pemutar mini berlatar solid."),
-    Glass("Kaca", "Isi halaman terlihat samar di balik bilah navigasi dan pemutar mini, seperti kaca buram."),
+    Glass("Kaca", "Konten tampak samar di balik bilah navigasi, seperti kaca buram."),
 }
 
 /** Kekuatan kilau skeleton saat memuat: Mati (diam), Redup (seperti sebelumnya), Terang (lebih mencolok). */

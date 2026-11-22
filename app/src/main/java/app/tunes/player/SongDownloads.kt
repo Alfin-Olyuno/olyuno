@@ -40,6 +40,9 @@ import java.net.URL
 import java.util.concurrent.ConcurrentHashMap
 import app.tunes.i18n.t
 
+/** Batas ukuran satu gambar sampul yang diunduh (byte). */
+private const val MAX_THUMB_BYTES = 8L * 1024 * 1024
+
 /**
  * Unduh lagu untuk didengar offline. Audio ditulis ke [MediaCaches.downloadCache] lewat jalur yang sama
  * dengan streaming ([ChunkedYoutubeDataSource]: tahan putus, URL kedaluwarsa diperbarui otomatis), jadi lagu
@@ -243,22 +246,40 @@ class SongDownloads(
         }
     }
 
+    /** Nama file sampul dari hash SHA-256 id koleksi (hashCode() 32-bit bisa bentrok antar koleksi). */
+    private fun thumbFileName(key: String): String =
+        java.security.MessageDigest.getInstance("SHA-256").digest(key.toByteArray(Charsets.UTF_8))
+            .take(12).joinToString("") { "%02x".format(it) }
+
     private fun saveThumbnail(key: String) {
+        var tmp: File? = null
         try {
             val c = collectionStore.get(key) ?: return
             val url = c.info.thumbnail ?: c.ref.thumbnail ?: return
-            if (!url.startsWith("http")) return
+            if (!url.startsWith("https://")) return
             thumbDir.mkdirs()
-            val f = File(thumbDir, "${key.hashCode().toUInt()}.img")
+            val name = thumbFileName(key)
+            val f = File(thumbDir, "$name.img")
+            val part = File(thumbDir, "$name.img.tmp").also { tmp = it }
             val conn = URL(url).openConnection().apply {
                 connectTimeout = 15_000
                 readTimeout = 20_000
             }
-            conn.getInputStream().use { input -> f.outputStream().use { input.copyTo(it) } }
-            if (f.length() <= 0) {
-                f.delete()
-                return
+            // Tulis ke file sementara dengan batas ukuran, lalu pindahkan; sampul lama tidak rusak kalau gagal.
+            conn.getInputStream().use { input ->
+                part.outputStream().use { out ->
+                    val buf = ByteArray(8 * 1024)
+                    var total = 0L
+                    while (true) {
+                        val n = input.read(buf)
+                        if (n < 0) break
+                        total += n
+                        if (total > MAX_THUMB_BYTES) throw IOException("sampul terlalu besar")
+                        out.write(buf, 0, n)
+                    }
+                }
             }
+            if (part.length() <= 0 || !part.renameTo(f)) return
             val local = Uri.fromFile(f).toString()
             // Paket mungkin sudah dihapus selama sampul diunduh.
             val cur = collectionStore.get(key)
@@ -271,6 +292,9 @@ class SongDownloads(
             throw e
         } catch (e: Exception) {
             // sampul tetap dimuat dari URL aslinya (cache Coil)
+        } finally {
+            // Sisa file sementara (gagal / dibatalkan / sudah dipindah = tidak ada lagi).
+            tmp?.delete()
         }
     }
 

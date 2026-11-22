@@ -41,7 +41,7 @@ fun LanguagePage(
                 .verticalScroll(rememberScrollState())
                 .padding(top = LocalTopInset.current, bottom = 16.dp + LocalBottomInset.current),
         ) {
-            SectionTitle(t("Bahasa app"))
+            SectionTitle(t("Bahasa aplikasi"))
             MenuGroup {
                 LanguageRow(
                     label = t("Default sistem"),

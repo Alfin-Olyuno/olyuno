@@ -75,8 +75,8 @@ private const val DIALOG_DIM = 0.5f
 /** Kepekatan kaca (0..1). Tinggi = hampir tidak tembus, jadi gambar di belakang bilah tidak terlihat jelas. */
 const val GLASS_ALPHA = 0.92f
 
-/** Kepekatan kaca khusus bilah tab & pemutar mini: sedikit lebih tembus dari [GLASS_ALPHA] (blur Olyuno menjaga isi tetap kabur). */
-const val BAR_GLASS_ALPHA = 0.80f
+/** Kepekatan kaca khusus bilah tab & pemutar mini: sedikit lebih tembus dari [GLASS_ALPHA]; cukup pekat supaya warna isi di belakang tidak menempel. */
+const val BAR_GLASS_ALPHA = 0.88f
 
 /** true kalau tema sedang terang (latar terang): kaca dibuat putih. Di tema gelap kaca tetap gelap. */
 @Composable

@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
@@ -68,7 +69,7 @@ fun EqualizerPage(
             }
             if (!state.attached) {
                 Text(
-                    t("Putar satu lagu dulu supaya efeknya terdengar. Pengaturanmu tetap tersimpan."),
+                    t("Putar lagu dulu untuk mendengar efeknya."),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(bottom = 8.dp),
@@ -85,12 +86,21 @@ fun EqualizerPage(
                 Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(bottom = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
+                val chipInverted = playCircleColors()
                 EqPreset.values().forEach { p ->
                     FilterChip(
                         selected = state.preset == p.id,
                         onClick = { vm.applyEqPreset(p) },
                         enabled = state.enabled,
                         label = { Text(t(p.label)) },
+                        colors = if (chipInverted != null) {
+                            FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = chipInverted.circle,
+                                selectedLabelColor = chipInverted.icon,
+                            )
+                        } else {
+                            FilterChipDefaults.filterChipColors()
+                        },
                     )
                 }
             }

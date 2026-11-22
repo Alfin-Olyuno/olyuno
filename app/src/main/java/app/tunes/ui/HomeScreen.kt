@@ -157,9 +157,11 @@ fun HomeScreen(
             item(key = "continue_header") { HomeSectionTitle(t("Lanjutkan")) }
             item(key = "continue_row") {
                 val list = remember(recent) { recent.take(20) }
+                // Baris mengikuti jumlah lagu (maks. 2): satu lagu = satu baris, tanpa ruang kosong di bawahnya.
+                val rowCount = list.size.coerceIn(1, 2)
                 LazyHorizontalGrid(
-                    rows = GridCells.Fixed(2),
-                    modifier = Modifier.fillMaxWidth().height(TRENDING_CARD_HEIGHT * 2 + 8.dp),
+                    rows = GridCells.Fixed(rowCount),
+                    modifier = Modifier.fillMaxWidth().height(gridHeight(rowCount, TRENDING_CARD_HEIGHT)),
                     contentPadding = PaddingValues(horizontal = 12.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -293,9 +295,9 @@ fun HomeScreen(
                     onClick = { vm.loadTrending(force = true) },
                 )
                 else -> LazyHorizontalGrid(
-                    // 2 baris lagu, tumbuh ke kanan; digeser kalau tidak muat.
-                    rows = GridCells.Fixed(2),
-                    modifier = Modifier.fillMaxWidth().height(TRENDING_CARD_HEIGHT * 2 + 8.dp),
+                    // Maks. 2 baris lagu, tumbuh ke kanan; digeser kalau tidak muat. Lagu sedikit = baris lebih sedikit.
+                    rows = GridCells.Fixed(list.size.coerceIn(1, 2)),
+                    modifier = Modifier.fillMaxWidth().height(gridHeight(list.size.coerceIn(1, 2), TRENDING_CARD_HEIGHT)),
                     contentPadding = PaddingValues(horizontal = 12.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -324,9 +326,10 @@ fun HomeScreen(
                 GenreSkeleton()
             } else {
                 // 3 baris, tumbuh ke kanan; digeser kalau tidak muat.
+                val genreRows = list.size.coerceIn(1, 3)
                 LazyHorizontalGrid(
-                    rows = GridCells.Fixed(3),
-                    modifier = Modifier.fillMaxWidth().height(GENRE_CHIP_HEIGHT * 3 + 8.dp * 2),
+                    rows = GridCells.Fixed(genreRows),
+                    modifier = Modifier.fillMaxWidth().height(gridHeight(genreRows, GENRE_CHIP_HEIGHT)),
                     contentPadding = PaddingValues(horizontal = 16.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -339,6 +342,10 @@ fun HomeScreen(
         }
     }
 }
+
+/** Tinggi grid horizontal dengan [rows] baris setinggi [cell] dan jarak antarbaris [gap]. */
+private fun gridHeight(rows: Int, cell: androidx.compose.ui.unit.Dp, gap: androidx.compose.ui.unit.Dp = 8.dp) =
+    cell * rows + gap * (rows - 1)
 
 /** Tinggi satu kartu lagu (sampul 124dp + judul 2 baris + artis + padding). */
 private val TRENDING_CARD_HEIGHT = 204.dp
@@ -650,13 +657,10 @@ private fun HomeSongCard(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        DropdownMenu(
-    expanded = menuOpen,
-    onDismissRequest = { menuOpen = false },
-    containerColor = glassMenuColor(),
-    border = glassEdge(),
-) {
-            SongMenu(vm, song) { menuOpen = false }
+        if (menuOpen) {
+            SongMenuSheet(song = song, onDismiss = { menuOpen = false }) { dismiss ->
+                SongMenu(vm, song, dismiss)
+            }
         }
     }
 }

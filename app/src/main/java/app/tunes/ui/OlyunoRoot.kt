@@ -588,7 +588,7 @@ fun OlyunoRoot(
                 title = { Text(t("Keluar dari akun?")) },
                 text = {
                     Text(
-                        t("Setelah keluar, data yang belum disinkronkan bisa hilang dari perangkat ini. Simpan dulu data Olyuno kamu supaya aman."),
+                        t("Data yang belum tersinkron bisa hilang setelah keluar. Ekspor dulu supaya aman."),
                         modifier = Modifier.verticalScroll(androidx.compose.foundation.rememberScrollState()),
                     )
                 },

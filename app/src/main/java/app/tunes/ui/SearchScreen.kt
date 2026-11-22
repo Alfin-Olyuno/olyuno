@@ -404,14 +404,11 @@ private fun RecentSongCard(
                         modifier = Modifier.size(18.dp),
                     )
                 }
-                DropdownMenu(
-    expanded = menuOpen,
-    onDismissRequest = { menuOpen = false },
-    containerColor = glassMenuColor(),
-    border = glassEdge(),
-) {
-                    SongMenu(vm, song) { menuOpen = false }
-                }
+                if (menuOpen) {
+            SongMenuSheet(song = song, onDismiss = { menuOpen = false }) { dismiss ->
+                SongMenu(vm, song, dismiss)
+            }
+        }
             }
         }
         Spacer(Modifier.size(8.dp))

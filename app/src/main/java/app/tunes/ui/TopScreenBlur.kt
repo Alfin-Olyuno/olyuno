@@ -45,6 +45,7 @@ import androidx.compose.ui.unit.dp
  * ke bawah. Karena mengikuti isi di belakangnya, tepinya tidak lurus rapi, melainkan tidak teratur
  * seperti kaca buram. Di bawah Android 12 tidak ada blur: hanya pemucatan warna latar.
  *
+ * Gaya "nyaris mati": blur dan pemucat dibuat sangat tipis, jadi hampir tak terlihat tapi tetap aktif.
  * Mau ganti tampilannya? Cukup ubah konstanta di bawah.
  */
 
@@ -52,17 +53,17 @@ import androidx.compose.ui.unit.dp
 private const val TOP_TINT_MIX = 0.03f
 
 /** Kepekatan pemucat di bagian paling atas (dengan blur). */
-private const val TOP_TINT_ALPHA = 0.50f
+private const val TOP_TINT_ALPHA = 0.10f
 
 /** Kepekatan pemucat kalau blur tidak tersedia (Android di bawah 12), supaya isi di belakang tetap samar. */
-private const val TOP_TINT_ALPHA_NO_BLUR = 0.88f
+private const val TOP_TINT_ALPHA_NO_BLUR = 0.30f
 
 /** Blur tipis (seluruh pita) dan blur kuat (bagian atas pita). */
-private val TOP_BLUR_LIGHT = 5.dp
-private val TOP_BLUR_STRONG = 15.dp
+private val TOP_BLUR_LIGHT = 1.5.dp
+private val TOP_BLUR_STRONG = 3.dp
 
 /** Panjang pudar di bawah area status bar. */
-private val TOP_FADE = 32.dp
+private val TOP_FADE = 14.dp
 
 /**
  * Ruang atas yang harus disisakan isi tab utama supaya tidak tertutup status bar waktu belum

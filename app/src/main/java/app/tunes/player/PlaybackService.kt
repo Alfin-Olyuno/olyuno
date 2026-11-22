@@ -690,12 +690,12 @@ class PlaybackService : MediaSessionService() {
             (type == android.media.AudioDeviceInfo.TYPE_BLE_HEADSET || type == android.media.AudioDeviceInfo.TYPE_BLE_SPEAKER)
     }
 
-    /** Toast streak, gaya sama dengan toast \"Anda kembali online.\" (toast sistem, singkat, satu kalimat). */
+    /** Toast streak, gaya sama dengan toast \"Kamu kembali online.\" (toast sistem, singkat, satu kalimat). */
     private fun showStreakToast(event: app.tunes.data.StreakEvent) {
         val text = when (event) {
             is app.tunes.data.StreakEvent.Started -> t("Streak dimulai.")
             is app.tunes.data.StreakEvent.Up -> t("Streak %d hari.", event.days)
-            is app.tunes.data.StreakEvent.FreezeUsed -> t("Freeze terpakai, streak Anda aman.")
+            is app.tunes.data.StreakEvent.FreezeUsed -> t("Freeze terpakai, streak kamu aman.")
             is app.tunes.data.StreakEvent.Record -> t("Rekor streak baru: %d hari.", event.days)
         }
         android.widget.Toast.makeText(applicationContext, text, android.widget.Toast.LENGTH_SHORT).show()

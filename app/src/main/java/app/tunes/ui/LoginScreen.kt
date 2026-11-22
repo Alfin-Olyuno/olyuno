@@ -1,7 +1,9 @@
 package app.tunes.ui
 
 import android.annotation.SuppressLint
+import android.net.Uri
 import android.webkit.CookieManager
+import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
@@ -67,8 +69,16 @@ fun LoginScreen(onCookie: (String) -> Unit, onBack: () -> Unit) {
                         settings.userAgentString = BROWSER_UA
                         CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
                         webViewClient = object : WebViewClient() {
+                            // Hanya https yang boleh dibuka di sini; skema lain (http, intent:, file:, dll.) diblokir.
+                            override fun shouldOverrideUrlLoading(
+                                view: WebView?,
+                                request: WebResourceRequest?,
+                            ): Boolean = request?.url?.scheme?.equals("https", ignoreCase = true) != true
+
                             override fun onPageFinished(view: WebView?, url: String?) {
-                                if (url == null || !url.startsWith(MUSIC_URL)) return
+                                // Host harus persis music.youtube.com (startsWith akan meloloskan music.youtube.com.evil.com).
+                                val u = url?.let(Uri::parse)
+                                if (u == null || u.scheme != "https" || u.host != "music.youtube.com") return
                                 val cookie = CookieManager.getInstance().getCookie(MUSIC_URL).orEmpty()
                                 if (cookie.contains("SAPISID=") && delivered.compareAndSet(false, true)) {
                                     onCookie(cookie)

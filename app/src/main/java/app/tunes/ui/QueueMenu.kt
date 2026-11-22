@@ -23,38 +23,18 @@ import app.tunes.i18n.t
 @Composable
 fun QueueMenu(vm: MainViewModel, song: SongItem, index: Int, current: Int, size: Int, dismiss: () -> Unit) {
     if (index != current && index != current + 1) {
-        DropdownMenuItem(
-            text = { Text(t("Putar berikutnya")) },
-            leadingIcon = { Icon(Icons.Rounded.PlaylistAdd, null) },
-            onClick = { vm.moveQueueItemNext(index); dismiss() },
-        )
+        SheetMenuItem(t("Putar berikutnya"), Icons.Rounded.PlaylistAdd) { vm.moveQueueItemNext(index); dismiss() }
     }
     if (index > 0) {
-        DropdownMenuItem(
-            text = { Text(t("Naikkan")) },
-            leadingIcon = { Icon(Icons.Rounded.ArrowUpward, null) },
-            onClick = { vm.moveQueueItem(index, index - 1); dismiss() },
-        )
+        SheetMenuItem(t("Naikkan"), Icons.Rounded.ArrowUpward) { vm.moveQueueItem(index, index - 1); dismiss() }
     }
     if (index < size - 1) {
-        DropdownMenuItem(
-            text = { Text(t("Turunkan")) },
-            leadingIcon = { Icon(Icons.Rounded.ArrowDownward, null) },
-            onClick = { vm.moveQueueItem(index, index + 1); dismiss() },
-        )
+        SheetMenuItem(t("Turunkan"), Icons.Rounded.ArrowDownward) { vm.moveQueueItem(index, index + 1); dismiss() }
     }
     if (!song.isLocal) {
-        DropdownMenuItem(
-            text = { Text(t("Mulai radio")) },
-            leadingIcon = { Icon(Icons.Rounded.Radio, null) },
-            onClick = { vm.startRadio(song); dismiss() },
-        )
+        SheetMenuItem(t("Mulai radio"), Icons.Rounded.Radio) { vm.startRadio(song); dismiss() }
     }
     if (index != current) {
-        DropdownMenuItem(
-            text = { Text(t("Hapus dari antrean")) },
-            leadingIcon = { Icon(Icons.Rounded.Delete, null) },
-            onClick = { vm.removeQueueItem(index); dismiss() },
-        )
+        SheetMenuItem(t("Hapus dari antrean"), Icons.Rounded.Delete) { vm.removeQueueItem(index); dismiss() }
     }
 }

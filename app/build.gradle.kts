@@ -17,13 +17,31 @@ android {
         versionName = "0.0.1-beta"
     }
 
+    // Keystore release tetap (dari environment / GitHub Secrets) supaya setiap APK bisa dipasang sebagai
+    // update di atas versi sebelumnya. Tanpa keystore, build jatuh ke debug key (hanya untuk uji lokal;
+    // debug key dibuat acak per mesin, jadi APK dari mesin berbeda saling konflik).
+    val releaseKeystore = System.getenv("OLYUNO_KEYSTORE_PATH")?.takeIf { it.isNotBlank() }?.let { File(it) }
+    val hasReleaseKeystore = releaseKeystore != null && releaseKeystore.isFile
+    if (hasReleaseKeystore) {
+        signingConfigs {
+            create("release") {
+                storeFile = releaseKeystore
+                storePassword = System.getenv("OLYUNO_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("OLYUNO_KEY_ALIAS")
+                keyPassword = System.getenv("OLYUNO_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
             // R8 sengaja dimatikan supaya build aman; aktifkan nanti kalau mau APK lebih kecil.
             isMinifyEnabled = false
-            // Ditandatangani dengan debug key supaya APK release langsung bisa di-install
-            // (untuk pemakaian pribadi / dibagi ke teman).
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = if (hasReleaseKeystore) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
         }
     }
 

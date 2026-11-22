@@ -13,8 +13,8 @@ import androidx.compose.ui.platform.LocalContext
 import app.tunes.i18n.t
 
 /**
- * Munculkan toast "Anda sedang offline." saat perangkat kehilangan internet (atau aplikasi dibuka dalam
- * keadaan offline), dan "Anda kembali online." saat internet kembali. Ada jeda singkat supaya pindah
+ * Munculkan toast "Kamu sedang offline." saat perangkat kehilangan internet (atau aplikasi dibuka dalam
+ * keadaan offline), dan "Kamu kembali online." saat internet kembali. Ada jeda singkat supaya pindah
  * Wi-Fi <-> data seluler tidak dianggap offline, dan toast tidak diulang selama keadaannya sama.
  */
 @Composable
@@ -37,7 +37,7 @@ fun OfflineToastEffect() {
             if (isOffline()) {
                 if (!shown) {
                     shown = true
-                    Toast.makeText(app, t("Anda sedang offline."), Toast.LENGTH_SHORT).show()
+                    Toast.makeText(app, t("Kamu sedang offline."), Toast.LENGTH_SHORT).show()
                 }
             } else {
                 shown = false
@@ -54,7 +54,7 @@ fun OfflineToastEffect() {
                 // Hanya kalau tadi sudah diberi tahu offline (pindah Wi-Fi <-> seluler tidak memicunya).
                 if (shown) {
                     shown = false
-                    Toast.makeText(app, t("Anda kembali online."), Toast.LENGTH_SHORT).show()
+                    Toast.makeText(app, t("Kamu kembali online."), Toast.LENGTH_SHORT).show()
                 }
             }
         }

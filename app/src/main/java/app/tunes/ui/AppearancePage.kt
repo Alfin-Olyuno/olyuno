@@ -62,7 +62,7 @@ import app.tunes.player.PlayerState
 import app.tunes.i18n.t
 
 /**
- * Halaman Tampilan: teks "Tampilan app" di paling atas, lalu tombol "Warna tampilan" (gaya sama dengan
+ * Halaman Tampilan: teks "Tampilan aplikasi" di paling atas, lalu tombol "Warna tampilan" (gaya sama dengan
  * tombol "Pilih bahasa" di layar lirik) yang membuka bottom sheet pilihan warna.
  */
 @Composable
@@ -99,7 +99,7 @@ fun AppearancePage(
                 .verticalScroll(rememberScrollState())
                 .padding(top = LocalTopInset.current, bottom = 16.dp + LocalBottomInset.current),
         ) {
-            SectionTitle(t("Tampilan app"))
+            SectionTitle(t("Tampilan aplikasi"))
             MenuGroup {
                 SwitchMenuRow(
                     leading = { Icon(Icons.Rounded.Palette, contentDescription = null, modifier = Modifier.size(24.dp)) },

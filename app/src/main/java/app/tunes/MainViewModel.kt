@@ -694,7 +694,20 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 val text = withContext(Dispatchers.IO) {
                     val input = getApplication<Application>().contentResolver.openInputStream(uri)
                         ?: throw java.io.IOException(t("File tidak bisa dibuka"))
-                    input.use { String(it.readBytes(), Charsets.UTF_8) }
+                    input.use { stream ->
+                        // Baca bertahap dengan batas ukuran supaya file raksasa tidak menghabiskan memori.
+                        val buf = java.io.ByteArrayOutputStream()
+                        val chunk = ByteArray(8 * 1024)
+                        var total = 0L
+                        while (true) {
+                            val n = stream.read(chunk)
+                            if (n < 0) break
+                            total += n
+                            if (total > Backup.MAX_FILE_BYTES) throw BackupFormatException(t("File cadangan terlalu besar"))
+                            buf.write(chunk, 0, n)
+                        }
+                        String(buf.toByteArray(), Charsets.UTF_8)
+                    }
                 }
                 val data = Backup.parse(text)
                 repo.mergeImported(data.songs)

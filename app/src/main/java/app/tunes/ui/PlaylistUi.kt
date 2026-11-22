@@ -42,6 +42,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.draw.clip
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -222,7 +223,7 @@ fun LocalPlaylistsPage(
                 if (playlists.isEmpty()) {
                     item(key = "empty") {
                         Text(
-                            t("Belum ada playlist. Buat satu, lalu tambahkan lagu lewat menu titik tiga."),
+                            t("Belum ada playlist. Buat satu dulu."),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(horizontal = 24.dp, vertical = 16.dp),
@@ -306,7 +307,7 @@ private fun PlaylistRow(
             .padding(horizontal = 8.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Artwork(playlist.songs.firstOrNull()?.thumbnail, Modifier.size(52.dp), RoundedCornerShape(12.dp))
+        PlaylistCover(playlist.songs, Modifier.size(52.dp), RoundedCornerShape(12.dp))
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(playlist.name, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -423,27 +424,50 @@ fun LocalPlaylistDetailPage(
                             menu = { dismiss ->
                                 SongMenu(vm, song, dismiss)
                                 if (!filtering && index > 0) {
-                                    DropdownMenuItem(
-                                        text = { Text(t("Naikkan")) },
-                                        leadingIcon = { Icon(Icons.Rounded.ArrowUpward, null) },
-                                        onClick = { vm.moveInPlaylist(playlist.id, song.videoId, -1); dismiss() },
-                                    )
+                                    SheetMenuItem(t("Naikkan"), Icons.Rounded.ArrowUpward) {
+                                        vm.moveInPlaylist(playlist.id, song.videoId, -1); dismiss()
+                                    }
                                 }
                                 if (!filtering && index < songs.lastIndex) {
-                                    DropdownMenuItem(
-                                        text = { Text(t("Turunkan")) },
-                                        leadingIcon = { Icon(Icons.Rounded.ArrowDownward, null) },
-                                        onClick = { vm.moveInPlaylist(playlist.id, song.videoId, 1); dismiss() },
-                                    )
+                                    SheetMenuItem(t("Turunkan"), Icons.Rounded.ArrowDownward) {
+                                        vm.moveInPlaylist(playlist.id, song.videoId, 1); dismiss()
+                                    }
                                 }
-                                DropdownMenuItem(
-                                    text = { Text(t("Hapus dari playlist")) },
-                                    leadingIcon = { Icon(Icons.Rounded.Delete, null) },
-                                    onClick = { vm.removeFromPlaylist(playlist.id, song.videoId); dismiss() },
-                                )
+                                SheetMenuItem(t("Hapus dari playlist"), Icons.Rounded.Delete) {
+                                    vm.removeFromPlaylist(playlist.id, song.videoId); dismiss()
+                                }
                             },
                         )
                     }
+                }
+            }
+        }
+    }
+}
+
+
+/**
+ * Sampul playlist ala Spotify: kolase 2x2 dari sampul empat lagu pertama (urutan: kiri atas, kanan atas,
+ * kiri bawah, kanan bawah). Bila sampul yang berbeda kurang dari empat (mis. satu album), tampil satu sampul
+ * dari lagu pertama. Playlist kosong menampilkan ikon not musik.
+ */
+@Composable
+fun PlaylistCover(
+    songs: List<SongItem>,
+    modifier: Modifier = Modifier,
+    shape: androidx.compose.ui.graphics.Shape = RoundedCornerShape(12.dp),
+) {
+    val covers = remember(songs) { songs.mapNotNull { it.thumbnail }.distinct().take(4) }
+    if (covers.size < 4) {
+        Artwork(covers.firstOrNull(), modifier, shape)
+        return
+    }
+    val tile = androidx.compose.ui.graphics.RectangleShape
+    Column(modifier.clip(shape)) {
+        for (row in 0..1) {
+            Row(Modifier.weight(1f).fillMaxWidth()) {
+                for (col in 0..1) {
+                    Artwork(covers[row * 2 + col], Modifier.weight(1f).fillMaxSize(), tile)
                 }
             }
         }

@@ -49,6 +49,7 @@ import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
+import app.tunes.OlyunoApp
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -57,6 +58,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -170,67 +172,44 @@ fun SongRow(
             )
         }
         if (menu != null) {
-            Box {
-                IconButton(onClick = { menuOpen = true }) {
-                    Icon(Icons.Rounded.MoreVert, contentDescription = t("Menu"))
-                }
-                DropdownMenu(
-    expanded = menuOpen,
-    onDismissRequest = { menuOpen = false },
-    containerColor = glassMenuColor(),
-    border = glassEdge(),
-) {
-                    menu { menuOpen = false }
+            IconButton(onClick = { menuOpen = true }) {
+                Icon(Icons.Rounded.MoreVert, contentDescription = t("Menu"))
+            }
+            if (menuOpen) {
+                SongMenuSheet(song = song, onDismiss = { menuOpen = false }) { dismiss ->
+                    menu(dismiss)
                 }
             }
         }
     }
 }
 
-/** Isi menu titik tiga standar untuk satu lagu. */
+/** Isi menu titik tiga standar untuk satu lagu (dipakai di dalam [SongMenuSheet]). */
 @Composable
 fun SongMenu(vm: MainViewModel, song: SongItem, dismiss: () -> Unit) {
-    DropdownMenuItem(
-        text = { Text("Putar berikutnya") },
-        leadingIcon = { Icon(Icons.Rounded.PlaylistAdd, null) },
-        onClick = { vm.playNext(song); dismiss() },
-    )
-    DropdownMenuItem(
-        text = { Text("Tambah ke antrean") },
-        leadingIcon = { Icon(Icons.Rounded.QueueMusic, null) },
-        onClick = { vm.addToQueue(song); dismiss() },
-    )
+    SheetMenuItem(t("Putar berikutnya"), Icons.Rounded.PlaylistAdd) { vm.playNext(song); dismiss() }
+    SheetMenuItem(t("Tambah ke antrean"), Icons.Rounded.QueueMusic) { vm.addToQueue(song); dismiss() }
     // Radio butuh id YouTube, jadi tidak untuk lagu perangkat.
     if (!song.isLocal) {
-        DropdownMenuItem(
-            text = { Text(t("Mulai radio")) },
-            leadingIcon = { Icon(Icons.Rounded.Radio, null) },
-            onClick = { vm.startRadio(song); dismiss() },
-        )
+        SheetMenuItem(t("Mulai radio"), Icons.Rounded.Radio) { vm.startRadio(song); dismiss() }
     }
-    DropdownMenuItem(
-        text = { Text(t("Tambah ke playlist")) },
-        leadingIcon = { Icon(Icons.Rounded.LibraryAdd, null) },
-        onClick = { vm.openPlaylistPicker(listOf(song)); dismiss() },
-    )
+    SheetMenuItem(t("Tambah ke playlist"), Icons.Rounded.LibraryAdd) { vm.openPlaylistPicker(listOf(song)); dismiss() }
     val liked by remember(song.videoId) { vm.isLiked(song.videoId) }
         .collectAsStateWithLifecycle(initialValue = false)
-    DropdownMenuItem(
-        text = { Text(if (liked) t("Batal suka") else t("Suka")) },
-        leadingIcon = { Icon(if (liked) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder, null) },
-        onClick = { vm.toggleLike(song); dismiss() },
-    )
+    SheetMenuItem(
+        if (liked) t("Batal suka") else t("Suka"),
+        if (liked) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+    ) { vm.toggleLike(song); dismiss() }
     if (!song.isLocal) {
         val downloaded by remember(song.videoId) { vm.isDownloaded(song.videoId) }
             .collectAsStateWithLifecycle(initialValue = false)
-        DropdownMenuItem(
-            text = { Text(if (downloaded) t("Hapus unduhan") else t("Unduh")) },
-            leadingIcon = { Icon(if (downloaded) Icons.Rounded.Delete else Icons.Rounded.Download, null) },
-            onClick = {
-                if (downloaded) vm.removeDownload(song) else vm.download(song)
-                dismiss()
-            },
-        )
+        SheetMenuItem(
+            if (downloaded) t("Hapus unduhan") else t("Unduh"),
+            if (downloaded) Icons.Rounded.Delete else Icons.Rounded.Download,
+        ) {
+            if (downloaded) vm.removeDownload(song) else vm.download(song)
+            dismiss()
+        }
     }
 }
 
@@ -359,13 +338,43 @@ internal fun MiniPlayerCompact(state: PlayerState, song: SongItem, onToggle: () 
     }
 }
 
+/** Warna bulatan tombol putar/jeda ([circle]) dan ikon di dalamnya ([icon]). */
+class PlayCircleColors(val circle: Color, val icon: Color)
+
+/**
+ * Bulatan di belakang tombol putar/jeda mengikuti Warna tampilan:
+ * Hitam = bulatan putih + ikon hitam; Putih = bulatan hitam + ikon putih;
+ * Kustom = bulatan warna aksen yang diturunkan dari latar kustom (selalu serasi dan terbaca);
+ * Ikuti sistem = tanpa bulatan (null), seperti semula.
+ */
+@Composable
+fun playCircleColors(): PlayCircleColors? {
+    val context = LocalContext.current
+    val appearance = remember(context) { (context.applicationContext as OlyunoApp).container.appearance }
+    val mode by appearance.mode.collectAsState()
+    val scheme = MaterialTheme.colorScheme
+    return when (mode) {
+        app.tunes.data.ColorMode.System -> null
+        app.tunes.data.ColorMode.Dark -> PlayCircleColors(Color.White, Color.Black)
+        app.tunes.data.ColorMode.Light -> PlayCircleColors(Color.Black, Color.White)
+        app.tunes.data.ColorMode.Custom -> PlayCircleColors(scheme.primary, scheme.onPrimary)
+    }
+}
+
 @Composable
 private fun PlayPauseButton(state: PlayerState, onToggle: () -> Unit) {
+    val colors = playCircleColors()
     SmoothIconButton(onClick = onToggle) {
-        if (state.isBuffering) {
-            ShimmerBox(Modifier.size(24.dp), CircleShape)
+        if (colors == null) {
+            if (state.isBuffering) ShimmerBox(Modifier.size(24.dp), CircleShape) else PlayPauseIcon(state.isPlaying)
         } else {
-            PlayPauseIcon(state.isPlaying)
+            Box(Modifier.size(38.dp).clip(CircleShape).background(colors.circle), contentAlignment = Alignment.Center) {
+                if (state.isBuffering) {
+                    ShimmerBox(Modifier.size(20.dp), CircleShape, colors.icon)
+                } else {
+                    PlayPauseIcon(state.isPlaying, Modifier.size(24.dp), tint = colors.icon)
+                }
+            }
         }
     }
 }
@@ -374,7 +383,7 @@ private fun PlayPauseButton(state: PlayerState, onToggle: () -> Unit) {
  * Ikon putar / jeda. Animasi smooth nyala: bergantian memudar (180 ms); mati: langsung berganti.
  */
 @Composable
-fun PlayPauseIcon(playing: Boolean, modifier: Modifier = Modifier) {
+fun PlayPauseIcon(playing: Boolean, modifier: Modifier = Modifier, tint: Color = androidx.compose.material3.LocalContentColor.current) {
     val smooth = LocalSmoothAnim.current
     Crossfade(
         targetState = playing,
@@ -385,6 +394,7 @@ fun PlayPauseIcon(playing: Boolean, modifier: Modifier = Modifier) {
             if (p) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
             contentDescription = if (p) t("Jeda") else t("Putar"),
             modifier = modifier,
+            tint = tint,
         )
     }
 }
