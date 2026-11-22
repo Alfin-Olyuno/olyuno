@@ -1,0 +1,656 @@
+package app.tunes.ui
+
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyHorizontalGrid
+import androidx.compose.foundation.lazy.grid.items as gridItems
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowForward
+import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.Shuffle
+import androidx.compose.material.icons.rounded.ThumbUp
+import androidx.compose.ui.graphics.Brush
+import app.tunes.innertube.AccountInfo
+import app.tunes.innertube.MixPlaylist
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.Alignment
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import app.tunes.innertube.CollectionKind
+import app.tunes.innertube.CollectionRef
+import app.tunes.innertube.quickGenres
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import app.tunes.MainViewModel
+import app.tunes.innertube.SongItem
+import kotlinx.coroutines.delay
+import java.util.Calendar
+import androidx.compose.foundation.layout.size
+import androidx.compose.ui.text.style.TextAlign
+import app.tunes.i18n.t
+import app.tunes.data.StatArtist
+
+// ------------------------------------------------------------------ sapaan
+
+/** Sapaan menurut jam di perangkat: 05.00 pagi, 12.00 siang, 15.00 sore, 18.00 malam (sampai 04.59). */
+private fun greetingFor(nowMs: Long): String {
+    val cal = Calendar.getInstance().apply { timeInMillis = nowMs }
+    return when (cal.get(Calendar.HOUR_OF_DAY)) {
+        in 5..11 -> t("Selamat pagi")
+        in 12..14 -> t("Selamat siang")
+        in 15..17 -> t("Selamat sore")
+        else -> t("Selamat malam")
+    }
+}
+
+// ----------------------------------------------------------------- layar
+
+/** Jumlah lagu per kolom di "Pilihan cepat". */
+private const val QUICK_PICKS_PER_COLUMN = 4
+
+@Composable
+fun HomeScreen(
+    vm: MainViewModel,
+    mostPlayed: List<SongItem>,
+    currentId: String?,
+    onOpenLiked: () -> Unit,
+    onOpenLibrary: () -> Unit,
+) {
+    // Cek ulang tiap menit supaya sapaan ikut berganti saat jam berubah.
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(60_000)
+            now = System.currentTimeMillis()
+        }
+    }
+    val greeting = greetingFor(now)
+    val quickPicks by vm.quickPicks.collectAsStateWithLifecycle()
+    val genres by vm.genres.collectAsStateWithLifecycle()
+    val trending by vm.trending.collectAsStateWithLifecycle()
+    val recent by vm.recent.collectAsStateWithLifecycle()
+    val topArtists by vm.topArtists.collectAsStateWithLifecycle()
+    val account by vm.account.collectAsStateWithLifecycle()
+    val mixPlaylists by vm.mixPlaylists.collectAsStateWithLifecycle()
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(top = LocalTabTopInset.current + 8.dp, bottom = 16.dp + LocalBottomInset.current),
+    ) {
+        item(key = "greeting") {
+            Text(
+                text = greeting,
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 4.dp),
+            )
+        }
+
+        // ---- Genre cepat: kotak kecil berjejer ke kanan, bisa digeser; ketuk membuka halaman genre.
+        item(key = "mood_row") {
+            LazyRow(
+                modifier = Modifier.padding(top = 8.dp),
+                contentPadding = PaddingValues(horizontal = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                items(quickGenres, key = { it.key }) { g ->
+                    MoodChip(g, onClick = { vm.openCollection(g) })
+                }
+            }
+        }
+
+        // ---- Lanjutkan: lagu yang terakhir diputar, 2 baris tumbuh ke kanan seperti "Sedang trending".
+        // Disembunyikan sepenuhnya kalau belum ada riwayat putar.
+        if (recent.isNotEmpty()) {
+            item(key = "continue_header") { HomeSectionTitle(t("Lanjutkan")) }
+            item(key = "continue_row") {
+                val list = remember(recent) { recent.take(20) }
+                LazyHorizontalGrid(
+                    rows = GridCells.Fixed(2),
+                    modifier = Modifier.fillMaxWidth().height(TRENDING_CARD_HEIGHT * 2 + 8.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    gridItems(list, key = { "c_" + it.videoId }) { song ->
+                        Box(Modifier.width(140.dp)) {
+                            HomeSongCard(
+                                song = song,
+                                isCurrent = song.videoId == currentId,
+                                onClick = { vm.playList(list, list.indexOf(song).coerceAtLeast(0)) },
+                                vm = vm,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // ---- Pilihan cepat: kolom isi 4 lagu (atas ke bawah), kolom berikutnya ke kanan; bisa digeser.
+        item(key = "quick_header") { HomeSectionTitle(t("Pilihan cepat")) }
+        item(key = "quick_row") {
+            val picks = quickPicks
+            when {
+                picks == null -> QuickPicksSkeleton()
+                picks.isEmpty() -> HomeRetry(
+                    text = t("Pilihan cepat gagal dimuat. Ketuk untuk coba lagi."),
+                    onClick = { vm.loadQuickPicks(force = true) },
+                )
+                else -> {
+                    val columns = remember(picks) { picks.take(20).chunked(QUICK_PICKS_PER_COLUMN) }
+                    // Lebar kolom ~ 88% layar supaya kolom berikutnya mengintip dan jelas bisa digeser.
+                    // Landscape: dibatasi 420dp supaya baris lagu tidak melebar sepanjang layar.
+                    val colWidth = minOf(LocalConfiguration.current.screenWidthDp * 0.88f, 420f).dp
+                    LazyRow(
+                        contentPadding = PaddingValues(horizontal = 4.dp),
+                    ) {
+                        items(columns.size, key = { columns[it].first().videoId }) { c ->
+                            Column(Modifier.width(colWidth)) {
+                                columns[c].forEachIndexed { r, song ->
+                                    val index = c * QUICK_PICKS_PER_COLUMN + r
+                                    SongRow(
+                                        song = song,
+                                        isCurrent = song.videoId == currentId,
+                                        onClick = { vm.playList(picks, index) },
+                                        menu = { dismiss -> SongMenu(vm, song, dismiss) },
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ---- Mix untukmu: hanya kalau sudah masuk akun. Header akun (ketuk = buka Koleksi), lalu kartu persegi
+        // berjejer ke kanan: Disukai dulu, lalu playlist akun dengan sampul kolase 2x2.
+        account?.let { acc ->
+            item(key = "mix_header") { MixHeader(acc, onClick = onOpenLibrary) }
+            item(key = "mix_row") {
+                LazyRow(
+                    contentPadding = PaddingValues(horizontal = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    item(key = "mix_liked") { MixLikedCard(onClick = onOpenLiked) }
+                    items(mixPlaylists, key = { "mix_" + it.ref.key }) { mix ->
+                        MixPlaylistCard(mix, accountName = acc.name, onClick = { vm.openCollection(mix.ref) })
+                    }
+                }
+            }
+        }
+
+        // ---- Paling sering diputar: disembunyikan sepenuhnya kalau belum ada data.
+        if (mostPlayed.isNotEmpty()) {
+            item(key = "most_header") { HomeSectionTitle(t("Paling sering diputar")) }
+            item(key = "most_row") {
+                LazyRow(
+                    contentPadding = PaddingValues(horizontal = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    items(mostPlayed, key = { it.videoId }) { song ->
+                        Box(Modifier.width(140.dp)) {
+                            HomeSongCard(
+                                song = song,
+                                isCurrent = song.videoId == currentId,
+                                onClick = { vm.playList(mostPlayed, mostPlayed.indexOf(song).coerceAtLeast(0)) },
+                                vm = vm,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // ---- Andalanmu: artis yang paling sering kamu putar, avatar bulat berjejer ke kanan.
+        // Ketuk membuka halaman lagu artis itu. Disembunyikan sepenuhnya kalau belum ada riwayat putar.
+        if (topArtists.isNotEmpty()) {
+            item(key = "anchor_header") { HomeSectionTitle(t("Andalanmu")) }
+            item(key = "anchor_row") {
+                LazyRow(
+                    contentPadding = PaddingValues(horizontal = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    items(topArtists, key = { "a_" + it.name }) { artist ->
+                        AnchorArtistCard(
+                            artist = artist,
+                            onClick = {
+                                vm.openCollection(CollectionRef(CollectionKind.QUERY, artist.name, query = artist.name))
+                            },
+                        )
+                    }
+                }
+            }
+        }
+
+        // ---- Sedang trending: kartu lagu yang bisa digeser ke kanan, tepat di bawah "Paling sering diputar".
+        item(key = "trending_header") { HomeSectionTitle(t("Sedang trending")) }
+        item(key = "trending_row") {
+            val list = trending
+            when {
+                list == null -> TrendingSkeleton()
+                list.isEmpty() -> HomeRetry(
+                    text = t("Sedang trending gagal dimuat. Ketuk untuk coba lagi."),
+                    onClick = { vm.loadTrending(force = true) },
+                )
+                else -> LazyHorizontalGrid(
+                    // 2 baris lagu, tumbuh ke kanan; digeser kalau tidak muat.
+                    rows = GridCells.Fixed(2),
+                    modifier = Modifier.fillMaxWidth().height(TRENDING_CARD_HEIGHT * 2 + 8.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    gridItems(list, key = { "t_" + it.videoId }) { song ->
+                        Box(Modifier.width(140.dp)) {
+                            HomeSongCard(
+                                song = song,
+                                isCurrent = song.videoId == currentId,
+                                onClick = { vm.playList(list, list.indexOf(song).coerceAtLeast(0)) },
+                                vm = vm,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // ---- Genre: ketuk untuk membuka halaman penuh berisi daftar lagunya.
+        item(key = "genre_header") {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                HomeSectionTitle(t("Genre"))
+                SmoothIconButton(onClick = vm::shuffleGenres, modifier = Modifier.padding(end = 8.dp, top = 12.dp)) {
+                    Icon(Icons.Rounded.Shuffle, contentDescription = t("Acak genre"))
+                }
+            }
+        }
+        item(key = "genre_grid") {
+            val list = genres
+            if (list == null) {
+                GenreSkeleton()
+            } else {
+                // 3 baris, tumbuh ke kanan; digeser kalau tidak muat.
+                LazyHorizontalGrid(
+                    rows = GridCells.Fixed(3),
+                    modifier = Modifier.fillMaxWidth().height(GENRE_CHIP_HEIGHT * 3 + 8.dp * 2),
+                    contentPadding = PaddingValues(horizontal = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    gridItems(list, key = { it.key }) { g ->
+                        GenreChip(g, onClick = { vm.openCollection(g) })
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** Tinggi satu kartu lagu (sampul 124dp + judul 2 baris + artis + padding). */
+private val TRENDING_CARD_HEIGHT = 204.dp
+private val GENRE_CHIP_HEIGHT = 52.dp
+// Semua chip genre berukuran sama persis (tidak mengikuti panjang teks).
+private val GENRE_CHIP_WIDTH = 132.dp
+
+@Composable
+private fun HomeSectionTitle(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.titleMedium,
+        modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 20.dp, bottom = 8.dp),
+    )
+}
+
+private val MIX_CARD_SIZE = 156.dp
+
+/** Header "Mix untukmu": foto akun (atau huruf pertama), label kecil, nama akun tebal, panah di kanan. */
+@Composable
+private fun MixHeader(account: AccountInfo, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(start = 16.dp, end = 16.dp, top = 20.dp, bottom = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (account.photoUrl != null) {
+            Artwork(url = account.photoUrl, modifier = Modifier.size(44.dp), shape = CircleShape)
+        } else {
+            Box(
+                Modifier.size(44.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primaryContainer),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = account.name.take(1).lowercase(),
+                    style = MaterialTheme.typography.titleLarge,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                )
+            }
+        }
+        Column(Modifier.weight(1f).padding(start = 12.dp)) {
+            Text(
+                text = t("Mix untukmu"),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                text = account.name,
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Icon(Icons.AutoMirrored.Rounded.ArrowForward, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
+private fun MixCardText(title: String, subtitle: String) {
+    Text(
+        text = title,
+        style = MaterialTheme.typography.titleSmall,
+        fontWeight = FontWeight.SemiBold,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier.padding(top = 8.dp),
+    )
+    Text(
+        text = subtitle,
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+    )
+}
+
+/** Kartu "Disukai": gradien ungu ke pink dengan ikon jempol. */
+@Composable
+private fun MixLikedCard(onClick: () -> Unit) {
+    Column(Modifier.width(MIX_CARD_SIZE).clip(RoundedCornerShape(16.dp)).clickable(onClick = onClick)) {
+        Box(
+            modifier = Modifier
+                .size(MIX_CARD_SIZE)
+                .clip(RoundedCornerShape(16.dp))
+                .background(Brush.verticalGradient(listOf(Color(0xFF8E6CF7), Color(0xFFFF5FA8)))),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(Icons.Rounded.ThumbUp, contentDescription = null, tint = Color.White, modifier = Modifier.size(72.dp))
+        }
+        MixCardText(t("Disukai"), t("Playlist otomatis"))
+    }
+}
+
+/** Kartu playlist akun: sampul kolase 2x2 dari 4 lagu pertama (kurang dari 4 = satu sampul). */
+@Composable
+private fun MixPlaylistCard(mix: MixPlaylist, accountName: String, onClick: () -> Unit) {
+    Column(Modifier.width(MIX_CARD_SIZE).clip(RoundedCornerShape(16.dp)).clickable(onClick = onClick)) {
+        val shape = RoundedCornerShape(16.dp)
+        val covers = mix.covers
+        if (covers.size >= 4) {
+            Column(Modifier.size(MIX_CARD_SIZE).clip(shape)) {
+                for (r in 0..1) {
+                    Row(Modifier.weight(1f)) {
+                        for (c in 0..1) {
+                            Artwork(
+                                url = covers[r * 2 + c],
+                                modifier = Modifier.weight(1f).fillMaxHeight(),
+                                shape = RoundedCornerShape(0.dp),
+                            )
+                        }
+                    }
+                }
+            }
+        } else {
+            Artwork(url = covers.firstOrNull(), modifier = Modifier.size(MIX_CARD_SIZE), shape = shape)
+        }
+        val count = mix.count?.let { t("%d lagu", it) }
+        MixCardText(mix.ref.title, listOfNotNull(accountName, count).joinToString(" • "))
+    }
+}
+
+/** Satu artis di "Andalanmu": avatar bulat, nama, dan jumlah putaran. */
+@Composable
+private fun AnchorArtistCard(artist: StatArtist, onClick: () -> Unit) {
+    Column(
+        modifier = Modifier
+            .width(112.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .clickable(onClick = onClick)
+            .padding(start = 8.dp, top = 6.dp, end = 8.dp, bottom = 10.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Artwork(
+            url = artist.thumbnail,
+            modifier = Modifier.fillMaxWidth().aspectRatio(1f),
+            shape = CircleShape,
+        )
+        Spacer(Modifier.height(8.dp))
+        Text(
+            text = artist.name,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,
+            style = MaterialTheme.typography.labelLarge,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Text(
+            text = t("%d kali diputar", artist.count),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+}
+
+@Composable
+private fun GenreChip(genre: CollectionRef, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .size(width = GENRE_CHIP_WIDTH, height = GENRE_CHIP_HEIGHT)
+            .clip(RoundedCornerShape(14.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+            .clickable(onClick = onClick),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.Center,
+    ) {
+        Text(
+            text = t(genre.title),
+            style = MaterialTheme.typography.labelLarge,
+            textAlign = TextAlign.Center,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(horizontal = 12.dp),
+        )
+    }
+}
+
+/** Kotak kecil bersudut membulat (bukan lancip) untuk genre cepat. */
+@Composable
+private fun MoodChip(genre: CollectionRef, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = t(genre.title),
+            style = MaterialTheme.typography.labelLarge,
+            maxLines = 1,
+        )
+    }
+}
+
+@Composable
+private fun QuickPicksSkeleton() {
+    ProvideShimmer {
+        Column { repeat(QUICK_PICKS_PER_COLUMN) { SongRowSkeleton(it) } }
+    }
+}
+
+@Composable
+private fun TrendingSkeleton() {
+    ProvideShimmer {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            repeat(2) {
+                Row(
+                    Modifier.padding(horizontal = 20.dp).height(TRENDING_CARD_HEIGHT),
+                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                ) {
+                    repeat(3) {
+                        Column(Modifier.width(124.dp).padding(top = 6.dp)) {
+                            ShimmerBox(Modifier.fillMaxWidth().aspectRatio(1f), RoundedCornerShape(12.dp))
+                            Spacer(Modifier.height(8.dp))
+                            ShimmerBox(Modifier.fillMaxWidth(0.8f).height(13.dp), RoundedCornerShape(7.dp))
+                            Spacer(Modifier.height(6.dp))
+                            ShimmerBox(Modifier.fillMaxWidth(0.5f).height(11.dp), RoundedCornerShape(6.dp))
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun GenreSkeleton() {
+    ProvideShimmer {
+        Row(
+            Modifier.padding(horizontal = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            repeat(4) { ShimmerBox(Modifier.size(width = GENRE_CHIP_WIDTH, height = GENRE_CHIP_HEIGHT), RoundedCornerShape(14.dp)) }
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun HomeSongCard(
+    song: SongItem,
+    isCurrent: Boolean,
+    onClick: () -> Unit,
+    vm: MainViewModel,
+) {
+    var menuOpen by remember { mutableStateOf(false) }
+    val haptic = LocalHapticFeedback.current
+    Box {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(14.dp))
+                .combinedClickable(
+                    onClick = onClick,
+                    onLongClick = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        menuOpen = true
+                    },
+                )
+                .padding(start = 8.dp, top = 6.dp, end = 8.dp, bottom = 10.dp),
+        ) {
+            Artwork(
+                url = song.thumbnail,
+                modifier = Modifier.fillMaxWidth().aspectRatio(1f),
+                shape = RoundedCornerShape(12.dp),
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = song.title,
+                minLines = 2,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.labelLarge,
+                color = if (isCurrent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+                text = song.artist,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        DropdownMenu(
+    expanded = menuOpen,
+    onDismissRequest = { menuOpen = false },
+    containerColor = glassMenuColor(),
+    border = glassEdge(),
+) {
+            SongMenu(vm, song) { menuOpen = false }
+        }
+    }
+}
+
+
+/** Pesan gagal muat di beranda: teks + ikon panah melingkar; seluruh baris bisa diketuk untuk coba lagi. */
+@Composable
+private fun HomeRetry(text: String, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f),
+        )
+        Icon(
+            Icons.Rounded.Refresh,
+            contentDescription = t("Coba lagi"),
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(24.dp),
+        )
+    }
+}
