@@ -83,14 +83,14 @@ fun LyricsSettingsPage(
     val keepAwake by vm.keepScreenAwake.collectAsStateWithLifecycle()
     var showSourceSheet by rememberSaveable { mutableStateOf(false) }
     val currentSong = player.current
-    var availability by remember(currentSong?.videoId) { mutableStateOf<Map<LyricsSource, Boolean>>(emptyMap()) }
+    var availability by remember(currentSong?.videoId) { mutableStateOf<Map<LyricsSource, app.tunes.lyrics.LyricsKind>>(emptyMap()) }
     LaunchedEffect(showSourceSheet, currentSong?.videoId) {
         val song = currentSong ?: return@LaunchedEffect
         if (!showSourceSheet) return@LaunchedEffect
         coroutineScope {
             listOf(LyricsSource.Lrclib, LyricsSource.BetterLyrics, LyricsSource.LyricsPlus, LyricsSource.BiniLyrics).forEach { src ->
                 launch {
-                    vm.lyricsAvailable(song, src)?.let { ok -> availability = availability + (src to ok) }
+                    vm.lyricsKind(song, src)?.let { k -> availability = availability + (src to k) }
                 }
             }
         }

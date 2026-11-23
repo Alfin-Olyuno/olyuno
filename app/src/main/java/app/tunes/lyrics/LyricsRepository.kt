@@ -104,25 +104,123 @@ class LyricsRepository(
     }
 
     /**
-     * Otomatis: semua layanan ditanya bersamaan; yang dipakai adalah lirik tersinkron dari layanan dengan
-     * prioritas tertinggi (Better Lyrics, Lyrics Plus, BiniLyrics, LRCLIB). Kalau tidak ada yang tersinkron, lirik polos / instrumental
-     * yang ada. Kalau tidak ada sama sekali, null (tetap "Lirik belum tersedia"). Error hanya dilaporkan kalau
+     * Otomatis: semua layanan ditanya bersamaan, lalu hasilnya dinilai dan dipilih yang paling cocok:
+     *  1. Lirik yang tidak cocok dengan lagunya dibuang: waktunya melewati durasi lagu, atau isinya berbeda jauh
+     *     dari hasil layanan lain yang saling sepakat (lagu lain / salah cari).
+     *  2. Lirik per kata yang sehat (waktu kata runtut, selaras dengan baris, hampir semua baris punya kata)
+     *     menang atas lirik per baris. Kalau waktu per katanya janggal, dianggap per baris saja (tidak ngebug).
+     *  3. Berikutnya lirik per baris, lalu lirik polos; instrumental hanya kalau tidak ada yang lain.
+     *  4. Seri: urutan Lyrics Plus, Better Lyrics, BiniLyrics, LRCLIB.
+     * Kalau tidak ada hasil sama sekali, null (tetap "Lirik belum tersedia"). Error hanya dilaporkan kalau
      * tidak ada hasil dan ada layanan yang gagal dijangkau.
      */
     private suspend fun fetchAuto(song: SongItem): Stored? = coroutineScope {
-        val order = listOf(LyricsSource.BetterLyrics, LyricsSource.LyricsPlus, LyricsSource.BiniLyrics, LyricsSource.Lrclib)
+        val order = listOf(LyricsSource.LyricsPlus, LyricsSource.BetterLyrics, LyricsSource.BiniLyrics, LyricsSource.Lrclib)
         val results = order.map { src -> async { src to runCatching { fetchFrom(src, song) } } }.awaitAll()
-        val found = results.mapNotNull { it.second.getOrNull() }
-        found.firstOrNull { it.synced && !it.instrumental }
-            ?: found.firstOrNull { !it.instrumental }
-            ?: found.firstOrNull()
-            ?: run {
-                val real = results
-                // Ada layanan yang berhasil dijangkau tapi tidak punya lirik, sementara layanan lain gagal:
-                // internet jelas ada, jadi penyebabnya lirik tidak tersedia, bukan "Tidak ada koneksi internet".
-                if (real.any { it.second.isSuccess }) throw IOException("Lirik tidak tersedia")
-                results.firstNotNullOfOrNull { it.second.exceptionOrNull() }?.let { throw it }
+        val found = results.mapNotNull { r -> r.second.getOrNull()?.let { r.first to it } }
+        val best = pickBest(song, order, found)
+        if (best != null) return@coroutineScope best
+        // Ada layanan yang berhasil dijangkau tapi tidak punya lirik, sementara layanan lain gagal:
+        // internet jelas ada, jadi penyebabnya lirik tidak tersedia, bukan "Tidak ada koneksi internet".
+        if (results.any { it.second.isSuccess }) throw IOException("Lirik tidak tersedia")
+        results.firstNotNullOfOrNull { it.second.exceptionOrNull() }?.let { throw it }
+        null
+    }
+
+    private class Candidate(
+        val order: Int,
+        val stored: Stored,
+        val lines: List<LyricLine>,
+        val wordSynced: Boolean,
+        val signature: Set<String>,
+    ) {
+        var suspect = false
+        var score = 0.0
+    }
+
+    private fun pickBest(song: SongItem, order: List<LyricsSource>, found: List<Pair<LyricsSource, Stored>>): Stored? {
+        if (found.isEmpty()) return null
+        val real = found.filter { !it.second.instrumental }
+        if (real.isEmpty()) return found.first().second
+
+        val cands = real.mapNotNull { (src, st) ->
+            val lines = if (st.synced) LrcParser.parse(st.text) else LrcParser.parsePlain(st.text)
+            if (lines.isEmpty()) return@mapNotNull null
+            val words = st.synced && wordSyncHealthy(lines)
+            Candidate(order.indexOf(src), st, lines, words, signatureOf(lines))
+        }
+        if (cands.isEmpty()) return found.first().second
+
+        val durMs = song.durationSec * 1000L
+        for (c in cands) {
+            // Lirik tersinkron yang berjalan jauh melewati akhir lagu = lagu / versi lain.
+            if (durMs > 0 && c.stored.synced) {
+                val last = c.lines.maxOf { it.timeMs }
+                if (last > durMs + 15_000L) c.suspect = true
+                else if (last < durMs * 0.4) c.score -= 25.0 // terpotong / hanya sebagian
             }
+        }
+        // Kecocokan isi dengan layanan lain: yang bertentangan dengan beberapa layanan yang saling sepakat = salah lagu.
+        if (cands.size >= 3) {
+            for (c in cands) {
+                val others = cands.filter { it !== c }
+                val sims = others.map { jaccard(c.signature, it.signature) }
+                val agreeingOthers = others.indices.count { i ->
+                    others.indices.any { j -> j != i && jaccard(others[i].signature, others[j].signature) >= 0.5 }
+                }
+                if (agreeingOthers >= 2 && (sims.maxOrNull() ?: 0.0) < 0.25) c.suspect = true
+            }
+        }
+        for (c in cands) {
+            val others = cands.filter { it !== c }
+            val agree = if (others.isEmpty()) 0.5 else others.map { jaccard(c.signature, it.signature) }.average()
+            c.score += (if (c.stored.synced) 100.0 else 0.0) +
+                (if (c.wordSynced) 60.0 else 0.0) +
+                agree * 20.0 -
+                c.order * 0.5
+        }
+        val pool = cands.filter { !it.suspect }.ifEmpty { cands }
+        return pool.maxByOrNull { it.score }?.stored
+    }
+
+    private fun normLine(x: String) = x.lowercase().filter { it.isLetterOrDigit() }
+
+    private fun signatureOf(lines: List<LyricLine>): Set<String> =
+        lines.map { normLine(it.text) }.filter { it.length >= 3 }.toSet()
+
+    private fun jaccard(a: Set<String>, b: Set<String>): Double {
+        if (a.isEmpty() || b.isEmpty()) return 0.0
+        val inter = a.count { it in b }
+        return inter.toDouble() / (a.size + b.size - inter)
+    }
+
+    /**
+     * true = waktu per kata layak dipakai: hampir semua baris punya kata, tiap baris rata-rata lebih dari satu
+     * potongan, waktu kata runtut dan tidak mundur, mulai dekat waktu barisnya, tidak melewati baris berikutnya
+     * terlalu jauh, dan gabungan katanya sama dengan teks barisnya. Lebih dari 10% baris janggal = tidak sehat.
+     */
+    private fun wordSyncHealthy(lines: List<LyricLine>): Boolean {
+        val textLines = lines.filter { it.text.isNotBlank() }
+        if (textLines.size < 3) return false
+        val withWords = textLines.filter { it.words.isNotEmpty() }
+        if (withWords.size < textLines.size * 0.7) return false
+        if (withWords.sumOf { it.words.size }.toDouble() / withWords.size < 1.5) return false
+        var bad = 0
+        for ((idx, l) in lines.withIndex()) {
+            if (l.words.isEmpty() || l.text.isBlank()) continue
+            val w = l.words
+            val next = lines.getOrNull(idx + 1)?.timeMs
+            var ok = true
+            if (w.first().startMs < l.timeMs - 1_500L || w.first().startMs > l.timeMs + 2_500L) ok = false
+            for (i in w.indices) {
+                if (w[i].endMs < w[i].startMs) ok = false
+                if (i > 0 && w[i].startMs < w[i - 1].startMs) ok = false
+            }
+            if (next != null && next > l.timeMs && w.last().endMs > next + 3_000L) ok = false
+            if (normLine(w.joinToString("") { it.text }) != normLine(l.text)) ok = false
+            if (!ok) bad++
+        }
+        return bad <= withWords.size * 0.1
     }
 
     // ---------------------------------------------------- Better Lyrics (TTML)
@@ -500,7 +598,7 @@ class LyricsRepository(
         private const val MAX_DURATION_DIFF_SEC = 8.0
 
         /** Naik tiap format cache berubah (3 = ada waktu per kata). */
-        private const val CACHE_VERSION = 3
+        private const val CACHE_VERSION = 4
 
         /** "A, B", "A & B", "A x B", "A - Topic" -> ["A", "B"]. */
         private val LYRICS_PLUS_MIRRORS = listOf(

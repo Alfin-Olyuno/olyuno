@@ -85,6 +85,8 @@ internal fun DeviceVolumeSlider(
     tint: Color = sheetInk,
     accent: Color = MaterialTheme.colorScheme.primary,
     iconSize: Dp = 20.dp,
+    /** true = ikon penuh (tanpa pudar) dan garis lebih pekat, dipakai saat warna ikon dibalik (Putih/Hitam/Kustom). */
+    solid: Boolean = false,
 ) {
     val volume = rememberDeviceVolume()
     val value by volume.fraction
@@ -93,7 +95,7 @@ internal fun DeviceVolumeSlider(
         else -> Icons.Rounded.VolumeDown
     }
     Row(modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Icon(leading, contentDescription = t("Volume perangkat"), tint = tint.copy(alpha = 0.7f), modifier = Modifier.size(iconSize))
+        Icon(leading, contentDescription = t("Volume perangkat"), tint = tint.copy(alpha = if (solid) 1f else 0.7f), modifier = Modifier.size(iconSize))
         GuardedSlider(
             value = value,
             onValueChange = volume::set,
@@ -120,7 +122,7 @@ internal fun DeviceVolumeSlider(
                         .fillMaxWidth()
                         .height(4.dp)
                         .clip(CircleShape)
-                        .background(tint.copy(alpha = 0.24f)),
+                        .background(tint.copy(alpha = if (solid) 0.35f else 0.24f)),
                 ) {
                     Box(
                         Modifier
@@ -131,6 +133,6 @@ internal fun DeviceVolumeSlider(
                 }
             },
         )
-        Icon(Icons.Rounded.VolumeUp, contentDescription = null, tint = tint.copy(alpha = 0.7f), modifier = Modifier.size(iconSize))
+        Icon(Icons.Rounded.VolumeUp, contentDescription = null, tint = tint.copy(alpha = if (solid) 1f else 0.7f), modifier = Modifier.size(iconSize))
     }
 }

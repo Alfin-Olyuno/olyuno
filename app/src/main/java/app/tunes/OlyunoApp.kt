@@ -107,6 +107,7 @@ class OlyunoApp : Application() {
         super.onCreate()
         app.tunes.i18n.I18n.init(this)
         container = AppContainer(this)
+        app.tunes.player.StreakReminder.schedule(this, container.notificationPrefs)
         registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
             override fun onActivityStarted(activity: Activity) {
                 startedActivities++

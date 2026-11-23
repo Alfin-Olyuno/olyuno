@@ -41,6 +41,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.unit.coerceAtLeast
 import androidx.compose.ui.unit.dp
 import app.tunes.MainViewModel
 import app.tunes.player.PlayerState
@@ -101,7 +102,14 @@ fun MiniPlayerScaffold(
                         .padding(top = if (topBar == null) padding.calculateTopPadding() else 0.dp)
                         .fillMaxSize()
                         .nestedScroll(bars)
-                        .then(if (glass.enabled || topBlurSupported()) Modifier.glassSource(backdrop) else Modifier),
+                        // Hanya halaman dengan bar judul: isinya menjangkau tepi atas layar (di belakang status bar + bar).
+                        .then(
+                            if (topBar != null) {
+                                Modifier.topBlurSource(solid = (barHeight - 10.dp).coerceAtLeast(0.dp), fade = 24.dp)
+                            } else {
+                                Modifier
+                            },
+                        ),
                 ) {
                     CompositionLocalProvider(
                         LocalBottomInset provides inset,
@@ -114,9 +122,9 @@ fun MiniPlayerScaffold(
                 }
                 // Blur berwarna di atas layar: isi yang digulir ke atas dikaburkan di belakang status bar / bar judul.
                 if (topBar != null) {
-                    TopScreenBlurForBar(backdrop = backdrop, barHeight = barHeight, modifier = Modifier.align(Alignment.TopCenter))
+                    TopScreenBlurForBar(barHeight = barHeight, modifier = Modifier.align(Alignment.TopCenter))
                 } else {
-                    TopScreenBlur(backdrop = backdrop, modifier = Modifier.align(Alignment.TopCenter))
+                    TopScreenBlur(modifier = Modifier.align(Alignment.TopCenter))
                 }
                 if (topBar != null) {
                     Box(

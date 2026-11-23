@@ -361,20 +361,22 @@ fun playCircleColors(): PlayCircleColors? {
     }
 }
 
+/**
+ * Warna ikon tombol (tanpa bulatan) mengikuti Warna tampilan:
+ * Hitam = putih; Putih = hitam; Kustom = warna aksen turunan latar kustom;
+ * Ikuti sistem = null (pakai warna bawaan).
+ */
+@Composable
+fun invertedIconColor(): Color? = playCircleColors()?.circle
+
 @Composable
 private fun PlayPauseButton(state: PlayerState, onToggle: () -> Unit) {
-    val colors = playCircleColors()
+    val tint = invertedIconColor()
     SmoothIconButton(onClick = onToggle) {
-        if (colors == null) {
-            if (state.isBuffering) ShimmerBox(Modifier.size(24.dp), CircleShape) else PlayPauseIcon(state.isPlaying)
+        if (state.isBuffering) {
+            ShimmerBox(Modifier.size(24.dp), CircleShape, tint)
         } else {
-            Box(Modifier.size(38.dp).clip(CircleShape).background(colors.circle), contentAlignment = Alignment.Center) {
-                if (state.isBuffering) {
-                    ShimmerBox(Modifier.size(20.dp), CircleShape, colors.icon)
-                } else {
-                    PlayPauseIcon(state.isPlaying, Modifier.size(24.dp), tint = colors.icon)
-                }
-            }
+            PlayPauseIcon(state.isPlaying, tint = tint ?: androidx.compose.material3.LocalContentColor.current)
         }
     }
 }

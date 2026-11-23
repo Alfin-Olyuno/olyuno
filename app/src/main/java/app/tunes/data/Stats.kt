@@ -20,6 +20,12 @@ data class Stats(
     val artists: List<StatArtist>,
     val albums: List<StatCollection>,
     val playlists: List<StatCollection>,
+    /** Perkiraan total waktu dengar (detik): jumlah durasi lagu tiap putaran. */
+    val totalSec: Long = 0L,
+    /** Jumlah lagu berbeda yang diputar. */
+    val uniqueSongs: Int = 0,
+    /** Jumlah hari (menurut zona waktu perangkat) yang ada putarannya. */
+    val activeDays: Int = 0,
 )
 
 /** Pemisah beberapa artis dalam satu lagu ("A, B" atau "A & B"). */
@@ -38,8 +44,12 @@ fun List<PlayRow>.toStats(limit: Int = 10): Stats {
     val artistLast = HashMap<String, Long>()
     val colCount = HashMap<String, Int>()
     val colRow = HashMap<String, PlayRow>()
+    val dayKeys = HashSet<Long>()
+    var totalSec = 0L
 
     for (r in this) {
+        totalSec += r.durationSec.coerceAtLeast(0)
+        dayKeys.add(StreakStore.epochDay(r.playedAt))
         songCount[r.videoId] = (songCount[r.videoId] ?: 0) + 1
         if (!songRow.containsKey(r.videoId)) songRow[r.videoId] = r
 
@@ -104,5 +114,8 @@ fun List<PlayRow>.toStats(limit: Int = 10): Stats {
         artists = artists,
         albums = top(CollectionKind.ALBUM),
         playlists = top(CollectionKind.PLAYLIST),
+        totalSec = totalSec,
+        uniqueSongs = songCount.size,
+        activeDays = dayKeys.size,
     )
 }

@@ -430,9 +430,9 @@ private suspend fun InnerTube.moodData(ref: CollectionRef): CollectionData {
 
 // -------------------------------------------------- Artis / Album / Playlist
 
-private suspend fun InnerTube.collectionData(ref: CollectionRef): CollectionData {
+private suspend fun InnerTube.collectionData(ref: CollectionRef, headers: Map<String, String> = emptyMap()): CollectionData {
     val id = ref.browseId ?: return CollectionData(emptyList())
-    val root = browse(id)
+    val root = browse(id, headers = headers)
     val header = root.findAll("musicResponsiveHeaderRenderer").firstOrNull()
         ?: root.findAll("musicDetailHeaderRenderer").firstOrNull()
         ?: root.findAll("musicImmersiveHeaderRenderer").firstOrNull()
@@ -453,7 +453,7 @@ private suspend fun InnerTube.collectionData(ref: CollectionRef): CollectionData
             }
             if (moreId != null && moreId != id) {
                 try {
-                    val full = collectSongs(browse(moreId), includeTwoRow = false, fallbackArtist = ref.title)
+                    val full = collectSongs(browse(moreId, headers = headers), includeTwoRow = false, fallbackArtist = ref.title)
                     if (full.size > songs.size) songs = full
                 } catch (e: CancellationException) {
                     throw e
@@ -496,7 +496,10 @@ private fun collectionInfo(header: JsonObject?, headerThumb: String?): Collectio
 }
 
 /** Muat daftar lagu + info header untuk [ref] (genre, artis, album, playlist, atau kata kunci). */
-suspend fun InnerTube.loadCollection(ref: CollectionRef): CollectionData {
+suspend fun InnerTube.loadCollection(ref: CollectionRef, cookie: String? = null): CollectionData {
+    // Playlist pribadi (mis. dari tab Akun / "Mix untukmu") hanya bisa dibuka atas nama akun pemiliknya.
+    // Tanpa login, YouTube Music mengembalikan halaman kosong dan dulu jatuh ke hasil pencarian judulnya (isi salah).
+    val headers = if (ref.kind == CollectionKind.PLAYLIST) cookie?.let(::authHeaders).orEmpty() else emptyMap()
     val data = when (ref.kind) {
         CollectionKind.QUERY -> CollectionData(querySongs(ref.query ?: ref.title))
         CollectionKind.GENRE -> CollectionData(genreSongs(ref))
@@ -510,10 +513,12 @@ suspend fun InnerTube.loadCollection(ref: CollectionRef): CollectionData {
                 ?.let { collectionData(it.copy(title = ref.title, thumbnail = it.thumbnail ?: ref.thumbnail)) }
                 ?: CollectionData(querySongs(ref.title))
         }
-        else -> collectionData(ref)
+        else -> collectionData(ref, headers)
     }
     // Halaman kosong (mis. genre tanpa lagu langsung): cadangan lewat pencarian judulnya.
-    val songs = data.songs.ifEmpty { if (ref.kind == CollectionKind.QUERY || ref.kind == CollectionKind.MOOD) data.songs else querySongs(ref.title) }
+    // Playlist akun yang dibuka dengan login tidak boleh diganti hasil pencarian: kosong ya kosong.
+    val noSearchFallback = ref.kind == CollectionKind.QUERY || ref.kind == CollectionKind.MOOD || headers.isNotEmpty()
+    val songs = data.songs.ifEmpty { if (noSearchFallback) data.songs else querySongs(ref.title) }
         .take(MAX_COLLECTION_SONGS)
     return data.copy(songs = songs)
 }

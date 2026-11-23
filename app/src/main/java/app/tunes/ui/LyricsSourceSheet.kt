@@ -36,6 +36,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import app.tunes.lyrics.LyricsKind
 import app.tunes.lyrics.LyricsSource
 import app.tunes.i18n.t
 
@@ -47,7 +48,7 @@ import app.tunes.i18n.t
 @Composable
 fun LyricsSourceSheet(
     current: LyricsSource,
-    availability: Map<LyricsSource, Boolean>,
+    availability: Map<LyricsSource, LyricsKind>,
     onSelect: (LyricsSource) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -119,11 +120,19 @@ fun LyricsSourceSheet(
 private fun SourceRow(
     source: LyricsSource,
     current: LyricsSource,
-    availability: Map<LyricsSource, Boolean>,
+    availability: Map<LyricsSource, LyricsKind>,
     onSelect: (LyricsSource) -> Unit,
 ) {
     val selected = source == current
-    val unavailable = availability[source] == false
+    // Deskripsi per layanan untuk lagu ini; Otomatis tetap "Pemilihan lirik yang cocok".
+    // Belum / gagal dicek (mis. tanpa jaringan) = "Lirik tersedia".
+    val description = if (source == LyricsSource.Auto) source.description else when (availability[source]) {
+        LyricsKind.None -> "Lirik tidak tersedia"
+        LyricsKind.Word -> "Menampilkan lirik per kata"
+        LyricsKind.Line -> "Menampilkan lirik per baris"
+        LyricsKind.Plain -> "Lirik tidak sinkron"
+        null -> "Lirik tersedia"
+    }
     val accent = MaterialTheme.colorScheme.primary
     Row(
         Modifier
@@ -134,19 +143,11 @@ private fun SourceRow(
     ) {
         Column(Modifier.weight(1f)) {
             Text(t(source.label), color = sheetInk, style = MaterialTheme.typography.bodyLarge)
-            if (unavailable) {
-                Text(
-                    t("Lirik tidak tersedia"),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = sheetInk.copy(alpha = 0.72f),
-                )
-            } else {
-                Text(
-                    t(source.description),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = sheetInk.copy(alpha = 0.72f),
-                )
-            }
+            Text(
+                t(description),
+                style = MaterialTheme.typography.bodySmall,
+                color = sheetInk.copy(alpha = 0.72f),
+            )
         }
         RadioButton(
             selected = selected,

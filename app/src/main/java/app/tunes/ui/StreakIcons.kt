@@ -66,7 +66,7 @@ private val FlamePath = Path().apply {
  */
 @Composable
 fun FlameLogo(on: Boolean, size: Dp, animated: Boolean = true, modifier: Modifier = Modifier) {
-    val t = rememberLoop(2600, on && animated)
+    val t = rememberLoop(3400, on && animated)
     val dim = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
     val sparks = size >= 48.dp
     Canvas(modifier.size(size)) {
@@ -82,11 +82,11 @@ fun FlameLogo(on: Boolean, size: Dp, animated: Boolean = true, modifier: Modifie
             val glowC = Offset(50f, 64f)
             drawCircle(
                 Brush.radialGradient(listOf(Color(0x66FF8A1F), Color.Transparent), glowC, 48f),
-                radius = 48f, center = glowC, alpha = 0.7f + 0.3f * pulse,
+                radius = 48f, center = glowC, alpha = 0.78f + 0.22f * pulse,
             )
             // Satu gerakan untuk seluruh api: ketiga lapis ikut meliuk dan berkedip bersama, jadi terlihat satu api utuh.
-            val rot = 3f * sin(a * 2f)
-            val sy = 1f + 0.045f * sin(a * 3f)
+            val rot = 1.1f * sin(a * 2f)
+            val sy = 1f + 0.018f * sin(a * 3f)
             withTransform({ rotate(rot, base); scale(1f, sy, base) }) {
                 drawPath(
                     FlamePath,
@@ -108,7 +108,7 @@ fun FlameLogo(on: Boolean, size: Dp, animated: Boolean = true, modifier: Modifie
             if (sparks) {
                 for (i in 0..2) {
                     val p = (t.value + i / 3f) % 1f
-                    val x = 50f + (i - 1) * 13f + 6f * sin((p * 2f + i) * TAU)
+                    val x = 50f + (i - 1) * 13f + 3.5f * sin((p * 2f + i) * TAU)
                     val y = 58f - 54f * p
                     drawCircle(Color(0xFFFFD25E), 2.2f * (1f - 0.5f * p), Offset(x, y), alpha = sin(p * PI.toFloat()))
                 }

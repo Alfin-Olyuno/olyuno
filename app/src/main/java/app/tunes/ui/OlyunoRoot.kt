@@ -54,6 +54,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.unit.coerceAtLeast
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -104,7 +105,7 @@ fun OlyunoRoot(
     // libraryPage 4 = daftar Playlist saya, 5 = isi satu playlist (id-nya di sini).
     var localPlaylistId by rememberSaveable { mutableLongStateOf(-1L) }
     val localPlaylists by vm.localPlaylists.collectAsStateWithLifecycle()
-    // Halaman penuh dari tab Anda: -1 tidak ada, 0 Ekualiser, 1 Riwayat lagu, 2 Informasi, 3 Pengaturan, 4 Tampilan, 11 Statistik, 14 Streak.
+    // Halaman penuh dari tab Anda: -1 tidak ada, 0 Ekualiser, 1 Riwayat lagu, 2 Informasi, 3 Pengaturan, 4 Tampilan, 11 Statistik & Rekap, 15 Rekap (halaman yang sama, dibuka di kartu Rekap), 14 Streak.
     var andaPage by rememberSaveable { mutableIntStateOf(-1) }
     // Halaman Tentang Olyuno (andaPage == 12) bisa dibuka dari tab Anda atau Pengaturan; ini halaman tujuan saat kembali (-1 atau 3).
     var aboutBackTo by rememberSaveable { mutableIntStateOf(-1) }
@@ -260,7 +261,8 @@ fun OlyunoRoot(
             Box(
                 Modifier
                     .nestedScroll(barsCollapse)
-                    .then(if (glass.enabled || topBlurSupported()) Modifier.glassSource(backdrop) else Modifier),
+                    // Blur atas-layar digambar di dalam container isi ini (satu pass), jadi tidak bisa tidak sinkron.
+                    .topBlurSource(solid = (statusBarHeight() - 2.dp).coerceAtLeast(0.dp)),
             ) {
               androidx.compose.runtime.CompositionLocalProvider(
                 LocalBottomInset provides padding.calculateBottomPadding(),
@@ -289,6 +291,7 @@ fun OlyunoRoot(
                         onOpenEqualizer = { andaPage = 0 },
                         onOpenHistory = { andaPage = 1 },
                         onOpenStats = { andaPage = 11 },
+                        onOpenRekap = { andaPage = 15 },
                         onOpenStreak = { andaPage = 14 },
                         onOpenInfo = { andaPage = 2 },
                         onOpenSettings = { andaPage = 3 },
@@ -302,7 +305,7 @@ fun OlyunoRoot(
                 }
               }
             }
-            TopScreenBlur(backdrop = backdrop, modifier = Modifier.align(androidx.compose.ui.Alignment.TopCenter))
+            TopScreenBlur(modifier = Modifier.align(androidx.compose.ui.Alignment.TopCenter))
             // Tombol muat ulang di atas kanan pemutar mini (hanya Beranda & Cari): turun hilang saat scroll ke bawah, naik lagi saat scroll ke atas.
             RefreshFab(
                 visible = (tab == 0 || tab == 1) && !barsCollapse.collapsed && !baseCovered,
@@ -427,7 +430,7 @@ fun OlyunoRoot(
         }
 
         // Statistik: tertutup saat halaman album / playlist / artis dibuka dari daftarnya.
-        PageTransition(visible = andaPage == 11, covered = openCollection != null) {
+        PageTransition(visible = andaPage == 11 || andaPage == 15, covered = openCollection != null) {
             StatisticsPage(
                 vm = vm,
                 player = player,

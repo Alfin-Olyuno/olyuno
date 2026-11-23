@@ -33,6 +33,7 @@ import app.tunes.innertube.searchAll
 import app.tunes.innertube.searchSuggestions
 import kotlinx.coroutines.delay
 import app.tunes.lyrics.LyricsSource
+import app.tunes.lyrics.kindOrNull
 import app.tunes.lyrics.LyricsState
 import app.tunes.lyrics.TranslationState
 import app.tunes.player.EqState
@@ -377,7 +378,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     val songs = container.sync.fetchMixSongs(ref.browseId.orEmpty()).orEmpty()
                     app.tunes.innertube.CollectionData(songs, CollectionInfo(thumbnail = ref.thumbnail))
                 } else {
-                    innerTube.loadCollection(ref)
+                    innerTube.loadCollection(ref, container.account.cookie())
                 }
                 if (data.songs.isEmpty()) {
                     CollectionState.Error(t("Tidak ada lagu di sini"))
@@ -882,6 +883,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         mixJob?.cancel()
         _mixPlaylists.value = emptyList()
         _mixOwner.value = null
+        collectionCache.clear()
         accountLibJobs.values.forEach { it.cancel() }
         accountLibJobs.clear()
         _accountLib.value = emptyMap()
@@ -913,13 +915,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun setLyricsSource(source: LyricsSource) = container.lyricsSource.set(source)
 
-    /** true = layanan punya lirik untuk lagu ini, false = tidak ada, null = gagal dicek (mis. tanpa jaringan). */
-    suspend fun lyricsAvailable(song: SongItem, source: LyricsSource): Boolean? =
-        when (container.lyrics.load(song, source)) {
-            is LyricsState.NotFound -> false
-            is LyricsState.Error, is LyricsState.Loading -> null
-            else -> true
-        }
+    /**
+     * Jenis lirik yang dimiliki layanan untuk lagu ini: None = tidak ada, Word / Line / Plain = per kata / per baris /
+     * tidak sinkron, null = gagal dicek (mis. tanpa jaringan) atau instrumental.
+     */
+    suspend fun lyricsKind(song: SongItem, source: LyricsSource): app.tunes.lyrics.LyricsKind? =
+        container.lyrics.load(song, source).kindOrNull()
 
     /** Lirik lagu yang sedang diputar; baru diunduh saat ada yang mengoleksi (layar lirik terbuka). */
     val lyrics: StateFlow<LyricsState> = combine(
@@ -1014,6 +1015,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun setNotifyDownloadFailed(on: Boolean) = container.notificationPrefs.setDownloadFailed(on)
     val notifyDownloadDone: StateFlow<Boolean> = container.notificationPrefs.downloadDone
     fun setNotifyDownloadDone(on: Boolean) = container.notificationPrefs.setDownloadDone(on)
+
+    /** Pengingat streak: saklar dan waktunya (menit sejak 00:00). */
+    val notifyStreak: StateFlow<Boolean> = container.notificationPrefs.streakReminder
+    fun setNotifyStreak(on: Boolean) = container.notificationPrefs.setStreakReminder(on)
+    val streakReminderMinute: StateFlow<Int> = container.notificationPrefs.reminderMinuteOfDay
+    fun setStreakReminderTime(hour: Int, minute: Int) = container.notificationPrefs.setReminderTime(hour, minute)
+    val notifyStreakLast: StateFlow<Boolean> = container.notificationPrefs.lastReminder
+    fun setNotifyStreakLast(on: Boolean) = container.notificationPrefs.setLastReminder(on)
+    val streakLastMinute: StateFlow<Int> = container.notificationPrefs.lastReminderMinuteOfDay
+    fun setStreakLastTime(hour: Int, minute: Int) = container.notificationPrefs.setLastReminderTime(hour, minute)
 
     /** Lanjutkan terakhir diputar: antrean & posisi lagu dipulihkan saat aplikasi dibuka lagi. */
     val resumeLast: StateFlow<Boolean> = container.playbackPrefs.resumeLast

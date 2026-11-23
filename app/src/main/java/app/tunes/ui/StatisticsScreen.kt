@@ -51,6 +51,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.flow.map
 import app.tunes.MainViewModel
 import app.tunes.data.PlayRow
+import app.tunes.data.StreakStore
 import app.tunes.data.toStats
 import app.tunes.i18n.AppLanguage
 import app.tunes.i18n.I18n
@@ -131,7 +132,27 @@ private fun scopeLabel(scope: Int): String {
 }
 
 /**
- * Statistik: lagu, artis, album, dan playlist yang paling sering diputar. Dropdown di paling atas memilih
+ * Streak terpanjang dalam rentang hari [fromDay]..[toDay] (epoch day): hari terhitung menambah, hari yang
+ * diselamatkan freeze menyambung tanpa menambah, hari kosong memutus.
+ */
+private fun longestRunBetween(days: Set<Long>, saved: Set<Long>, fromDay: Long, toDay: Long): Int {
+    var best = 0
+    var run = 0
+    var d = fromDay
+    while (d <= toDay) {
+        if (d in days) {
+            run++
+            if (run > best) best = run
+        } else if (d !in saved) {
+            run = 0
+        }
+        d++
+    }
+    return best
+}
+
+/**
+ * Statistik & Rekap: kartu Rekap di atas (bisa dibagikan sebagai gambar), lalu lagu, artis, album, dan playlist yang paling sering diputar. Dropdown di paling atas memilih
  * cakupan waktu; saat "Semuanya", baris periode di bawahnya (bisa digeser) mempersempitnya.
  */
 @Composable
@@ -152,8 +173,14 @@ fun StatisticsPage(
     val rows: List<PlayRow>? by remember(from) { vm.playRows(from).map<List<PlayRow>, List<PlayRow>?> { it } }
         .collectAsStateWithLifecycle(initialValue = null)
     val stats = remember(rows) { rows?.toStats(LIST_LIMIT) }
+    val streak by vm.streak.collectAsStateWithLifecycle()
+    val periodLabel = if (scope == 0) {
+        if (range < 0) t(SCOPES[0]) else t(RANGES[range])
+    } else {
+        scopeLabel(scope)
+    }
 
-    SubPage(title = t("Statistik"), vm = vm, player = player, onBack = onBack, onOpenPlayer = onOpenPlayer) {
+    SubPage(title = t("Statistik & Rekap"), vm = vm, player = player, onBack = onBack, onOpenPlayer = onOpenPlayer) {
         LazyColumn(
             Modifier.fillMaxSize(),
             contentPadding = PaddingValues(top = LocalTopInset.current, bottom = 16.dp + LocalBottomInset.current),
@@ -206,12 +233,28 @@ fun StatisticsPage(
                     )
                 }
                 else -> {
+                    item(key = "rekap") {
+                        val longest = if (from == 0L) streak.longest
+                        else longestRunBetween(streak.days, streak.saved, StreakStore.epochDay(from), streak.todayEpochDay)
+                        RekapCard(
+                            data = RekapData(
+                                periodLabel = periodLabel,
+                                minutes = if (s.totalSec > 0) maxOf(1L, (s.totalSec + 30) / 60) else 0L,
+                                songs = s.uniqueSongs,
+                                activeDays = s.activeDays,
+                                longestStreak = longest,
+                                topSongs = s.songs.take(3).map { RekapEntry(it.song.title, it.song.artist, it.song.thumbnail) },
+                                topArtists = s.artists.take(3).map { RekapEntry(it.name, null, it.thumbnail) },
+                            ),
+                            modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 16.dp),
+                        )
+                    }
                     item(key = "total") {
                         Text(
                             text = t("%d kali diputar", s.total),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 16.dp),
+                            modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 20.dp),
                         )
                     }
 

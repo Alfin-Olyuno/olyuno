@@ -34,7 +34,10 @@ import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Downloading
 import androidx.compose.material.icons.rounded.ErrorOutline
+import androidx.compose.material.icons.rounded.LocalFireDepartment
 import androidx.compose.material.icons.rounded.MusicNote
+import androidx.compose.material.icons.rounded.NightsStay
+import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.TaskAlt
 import androidx.compose.material3.Icon
@@ -146,6 +149,10 @@ fun NotificationsPage(
     val context = LocalContext.current
     val failedOn by vm.notifyDownloadFailed.collectAsStateWithLifecycle()
     val doneOn by vm.notifyDownloadDone.collectAsStateWithLifecycle()
+    val streakOn by vm.notifyStreak.collectAsStateWithLifecycle()
+    val reminderMin by vm.streakReminderMinute.collectAsStateWithLifecycle()
+    val lastOn by vm.notifyStreakLast.collectAsStateWithLifecycle()
+    val lastMin by vm.streakLastMinute.collectAsStateWithLifecycle()
     var granted by remember { mutableStateOf(NotificationManagerCompat.from(context).areNotificationsEnabled()) }
 
     // Diperiksa ulang tiap kembali ke aplikasi (izin bisa diubah dari pengaturan sistem).
@@ -188,6 +195,74 @@ fun NotificationsPage(
             SectionTitle(t("Notifikasi"))
             MenuGroup {
                 NotificationPermissionRow(granted = granted, onClick = ::onPermissionClick)
+            }
+
+            Spacer(Modifier.height(8.dp))
+            SectionTitle(t("Streak"))
+            MenuGroup {
+                SwitchMenuRow(
+                    leading = { Icon(Icons.Rounded.LocalFireDepartment, contentDescription = null, modifier = Modifier.size(24.dp)) },
+                    label = t("Pengingat streak"),
+                    description = t("Diingatkan kalau streak hari ini belum terhitung."),
+                    checked = streakOn,
+                    onChange = vm::setNotifyStreak,
+                    dimmed = !granted,
+                )
+                MenuDivider()
+                MenuRow(
+                    leading = { Icon(Icons.Rounded.Schedule, contentDescription = null, modifier = Modifier.size(24.dp)) },
+                    label = t("Waktu pengingat"),
+                    onClick = if (streakOn) {
+                        {
+                            android.app.TimePickerDialog(
+                                context,
+                                { _, h, m -> vm.setStreakReminderTime(h, m) },
+                                reminderMin / 60,
+                                reminderMin % 60,
+                                true,
+                            ).show()
+                        }
+                    } else null,
+                    dimmed = !streakOn || !granted,
+                ) {
+                    Text(
+                        String.format(java.util.Locale.ROOT, "%02d:%02d", reminderMin / 60, reminderMin % 60),
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                MenuDivider()
+                SwitchMenuRow(
+                    leading = { Icon(Icons.Rounded.NightsStay, contentDescription = null, modifier = Modifier.size(24.dp)) },
+                    label = t("Pengingat terakhir"),
+                    description = t("Sekali lagi menjelang pergantian hari kalau streak masih belum terhitung."),
+                    checked = lastOn,
+                    onChange = vm::setNotifyStreakLast,
+                    dimmed = !granted,
+                )
+                MenuDivider()
+                MenuRow(
+                    leading = { Icon(Icons.Rounded.Schedule, contentDescription = null, modifier = Modifier.size(24.dp)) },
+                    label = t("Waktu pengingat terakhir"),
+                    onClick = if (lastOn) {
+                        {
+                            android.app.TimePickerDialog(
+                                context,
+                                { _, h, m -> vm.setStreakLastTime(h, m) },
+                                lastMin / 60,
+                                lastMin % 60,
+                                true,
+                            ).show()
+                        }
+                    } else null,
+                    dimmed = !lastOn || !granted,
+                ) {
+                    Text(
+                        String.format(java.util.Locale.ROOT, "%02d:%02d", lastMin / 60, lastMin % 60),
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
 
             Spacer(Modifier.height(8.dp))

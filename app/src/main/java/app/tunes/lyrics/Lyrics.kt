@@ -22,7 +22,21 @@ sealed interface LyricsState {
     data class Ready(val lines: List<LyricLine>, val synced: Boolean, val source: String? = null) : LyricsState
 }
 
-/** Pilihan layanan lirik. [Auto] mencoba semua layanan dan memakai yang paling cocok dan tersedia. */
+/** Jenis lirik yang tersedia dari satu layanan untuk satu lagu (dipakai deskripsi di sheet pilihan layanan). */
+enum class LyricsKind { None, Word, Line, Plain }
+
+/** Word = ada waktu per kata, Line = tersinkron per baris, Plain = tidak tersinkron. Instrumental / belum jelas = null. */
+fun LyricsState.kindOrNull(): LyricsKind? = when (this) {
+    is LyricsState.NotFound -> LyricsKind.None
+    is LyricsState.Ready -> when {
+        !synced -> LyricsKind.Plain
+        lines.any { it.words.isNotEmpty() } -> LyricsKind.Word
+        else -> LyricsKind.Line
+    }
+    else -> null
+}
+
+/** Pilihan layanan lirik. [Auto] menanyai semua layanan lalu memilih yang liriknya cocok; lirik per kata yang sehat diutamakan. */
 enum class LyricsSource(val key: String, val label: String, val description: String) {
     Auto("auto", "Otomatis", "Pemilihan lirik yang cocok"),
     Lrclib("lrclib", "LRCLIB", "Menampilkan lirik per baris"),

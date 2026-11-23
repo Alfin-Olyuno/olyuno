@@ -57,6 +57,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -372,6 +373,16 @@ private fun HomeSectionTitle(text: String) {
 
 private val MIX_CARD_SIZE = 156.dp
 
+/**
+ * Gaya tinggi baris untuk teks Mix: tanpa pemangkasan ruang atas/bawah baris (Trim.None) dan teks di tengah baris.
+ * Bawaan Compose memangkas ascent baris pertama, sehingga bagian atas huruf besar, angka, dan "p" ikut terpotong
+ * di teks satu baris yang dipangkas (maxLines + ellipsis) pada font aplikasi.
+ */
+private val MixLineHeight = LineHeightStyle(
+    alignment = LineHeightStyle.Alignment.Center,
+    trim = LineHeightStyle.Trim.None,
+)
+
 /** Header "Mix untukmu": foto akun (atau huruf pertama), label kecil, nama akun tebal, panah di kanan. */
 @Composable
 private fun MixHeader(account: AccountInfo, onClick: () -> Unit) {
@@ -399,12 +410,12 @@ private fun MixHeader(account: AccountInfo, onClick: () -> Unit) {
         Column(Modifier.weight(1f).padding(start = 12.dp)) {
             Text(
                 text = t("Mix untukmu"),
-                style = MaterialTheme.typography.labelMedium,
+                style = MaterialTheme.typography.labelMedium.copy(lineHeight = 20.sp, lineHeightStyle = MixLineHeight),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Text(
                 text = account.name,
-                style = MaterialTheme.typography.titleLarge,
+                style = MaterialTheme.typography.titleLarge.copy(lineHeightStyle = MixLineHeight),
                 fontWeight = FontWeight.Bold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -418,7 +429,7 @@ private fun MixHeader(account: AccountInfo, onClick: () -> Unit) {
 private fun MixCardText(title: String, subtitle: String) {
     Text(
         text = title,
-        style = MaterialTheme.typography.titleSmall.copy(lineHeight = 22.sp),
+        style = MaterialTheme.typography.titleSmall.copy(lineHeight = 22.sp, lineHeightStyle = MixLineHeight),
         fontWeight = FontWeight.SemiBold,
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
@@ -428,7 +439,7 @@ private fun MixCardText(title: String, subtitle: String) {
     // huruf besar / "p" terpotong saat teks dipangkas (maxLines + ellipsis memotong ke batas barisnya).
     Text(
         text = subtitle,
-        style = MaterialTheme.typography.labelMedium.copy(lineHeight = 20.sp),
+        style = MaterialTheme.typography.labelMedium.copy(lineHeight = 20.sp, lineHeightStyle = MixLineHeight),
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,

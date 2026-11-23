@@ -61,6 +61,7 @@ import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.SkipPrevious
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
@@ -455,11 +456,11 @@ private fun PlayerPage(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 IconButton(onClick = onClose) {
-                    Icon(Icons.Rounded.KeyboardArrowDown, contentDescription = t("Tutup"))
+                    Icon(Icons.Rounded.KeyboardArrowDown, contentDescription = t("Tutup"), tint = invertedIconColor() ?: LocalContentColor.current)
                 }
                 Text("Sedang diputar", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
                 IconButton(onClick = { showPlayerMenu = true }) {
-                    Icon(Icons.Rounded.MoreHoriz, contentDescription = t("Pemutaran"))
+                    Icon(Icons.Rounded.MoreHoriz, contentDescription = t("Pemutaran"), tint = invertedIconColor() ?: LocalContentColor.current)
                 }
             }
         }
@@ -512,7 +513,14 @@ private fun PlayerPage(
         item { ControlsRow(vm, state) }
         // Volume perangkat: tepat di bawah tombol kontrol, selebar slider durasi tapi lebih sempit
         // di kiri-kanan supaya terbaca sebagai kontrol sekunder.
-        item { DeviceVolumeSlider(Modifier.padding(start = 36.dp, end = 36.dp, top = 20.dp)) }
+        item {
+            val inv = invertedIconColor()
+            if (inv != null) {
+                DeviceVolumeSlider(Modifier.padding(start = 36.dp, end = 36.dp, top = 20.dp), tint = inv, accent = inv, solid = true)
+            } else {
+                DeviceVolumeSlider(Modifier.padding(start = 36.dp, end = 36.dp, top = 20.dp))
+            }
+        }
 
         item {
             Row(
@@ -699,7 +707,7 @@ private fun LyricsPage(
     var showSourceSheet by remember { mutableStateOf(false) }
     // Ketersediaan lirik per layanan untuk lagu ini (true/false), diperiksa saat sheet dibuka.
     var availability by remember(song.videoId) {
-        mutableStateOf<Map<app.tunes.lyrics.LyricsSource, Boolean>>(emptyMap())
+        mutableStateOf<Map<app.tunes.lyrics.LyricsSource, app.tunes.lyrics.LyricsKind>>(emptyMap())
     }
     LaunchedEffect(showSourceSheet, song.videoId) {
         if (!showSourceSheet) return@LaunchedEffect
@@ -711,7 +719,7 @@ private fun LyricsPage(
                 app.tunes.lyrics.LyricsSource.BiniLyrics,
             ).forEach { src ->
                 launch {
-                    vm.lyricsAvailable(song, src)?.let { ok -> availability = availability + (src to ok) }
+                    vm.lyricsKind(song, src)?.let { k -> availability = availability + (src to k) }
                 }
             }
         }
@@ -1022,7 +1030,9 @@ private fun LyricsPage(
 private fun SeekSection(vm: MainViewModel, state: PlayerState) {
     var dragging by remember { mutableStateOf<Float?>(null) }
     val duration = state.durationMs.coerceAtLeast(1L).toFloat()
-    val accent = MaterialTheme.colorScheme.primary
+    val inv = invertedIconColor()
+    val accent = inv ?: MaterialTheme.colorScheme.primary
+    val trackBase = inv ?: Color.White
     Column(Modifier.padding(horizontal = 24.dp, vertical = 8.dp)) {
         GuardedSlider(
             value = (dragging ?: state.positionMs.toFloat()).coerceIn(0f, duration),
@@ -1053,7 +1063,7 @@ private fun SeekSection(vm: MainViewModel, state: PlayerState) {
                         .fillMaxWidth()
                         .height(4.dp)
                         .clip(CircleShape)
-                        .background(Color.White.copy(alpha = 0.24f)),
+                        .background(trackBase.copy(alpha = if (inv != null) 0.35f else 0.24f)),
                 ) {
                     Box(
                         Modifier
@@ -1076,8 +1086,11 @@ private fun SeekSection(vm: MainViewModel, state: PlayerState) {
 
 @Composable
 private fun ControlsRow(vm: MainViewModel, state: PlayerState) {
-    val active = MaterialTheme.colorScheme.primary
-    val inactive = Color.White.copy(alpha = 0.65f)
+    // Warna tampilan Hitam = ikon putih, Putih = ikon hitam, Kustom = warna aksen; Ikuti sistem = bawaan (null).
+    val inv = invertedIconColor()
+    val base = inv ?: Color.White
+    val active = inv ?: MaterialTheme.colorScheme.primary
+    val inactive = base.copy(alpha = if (inv != null) 0.6f else 0.65f)
     Row(
         Modifier
             .fillMaxWidth()
@@ -1093,7 +1106,7 @@ private fun ControlsRow(vm: MainViewModel, state: PlayerState) {
             )
         }
         SmoothIconButton(onClick = vm::previous) {
-            Icon(Icons.Rounded.SkipPrevious, contentDescription = t("Sebelumnya"), modifier = Modifier.size(36.dp))
+            Icon(Icons.Rounded.SkipPrevious, contentDescription = t("Sebelumnya"), tint = base, modifier = Modifier.size(36.dp))
         }
         // Tombol putar/jeda tanpa bulatan penuh; bulatan hanya tampak (memudar) saat ditekan, selain ripple bawaan.
         val playSource = androidx.compose.runtime.remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
@@ -1103,33 +1116,27 @@ private fun ControlsRow(vm: MainViewModel, state: PlayerState) {
             animationSpec = smoothSpec(androidx.compose.animation.core.tween(if (playPressed) 90 else 260)),
             label = "playPressGlow",
         )
-        // Warna tampilan Hitam / Putih / Kustom: tombol diberi bulatan penuh (lihat playCircleColors); Ikuti sistem tanpa bulatan.
-        val circleColors = playCircleColors()
         IconButton(
             onClick = vm::togglePlay,
             interactionSource = playSource,
             modifier = Modifier
                 .size(72.dp)
                 .pressScale(playSource, 0.92f)
-                .background(
-                    circleColors?.circle ?: Color.White.copy(alpha = pressGlow),
-                    CircleShape,
-                ),
+                .background(base.copy(alpha = pressGlow), CircleShape),
         ) {
             if (state.isBuffering) {
-                ShimmerBox(
-                    Modifier.size(34.dp),
-                    CircleShape,
-                    circleColors?.icon ?: Color.White,
-                )
-            } else if (circleColors != null) {
-                PlayPauseIcon(state.isPlaying, Modifier.size(40.dp), tint = circleColors.icon)
+                ShimmerBox(Modifier.size(34.dp), CircleShape, base)
             } else {
-                PlayPauseIcon(state.isPlaying, Modifier.size(48.dp))
+                PlayPauseIcon(state.isPlaying, Modifier.size(48.dp), tint = base)
             }
         }
         SmoothIconButton(onClick = vm::next, enabled = state.hasNext) {
-            Icon(Icons.Rounded.SkipNext, contentDescription = t("Berikutnya"), modifier = Modifier.size(36.dp))
+            Icon(
+                Icons.Rounded.SkipNext,
+                contentDescription = t("Berikutnya"),
+                tint = if (state.hasNext) base else base.copy(alpha = 0.38f),
+                modifier = Modifier.size(36.dp),
+            )
         }
         SmoothIconButton(onClick = vm::cycleRepeat) {
             val one = state.repeatMode == Player.REPEAT_MODE_ONE
@@ -1157,8 +1164,10 @@ private fun PillButton(
     /** Gerak tekan hanya untuk tombol aksi (Bagikan); tombol pembuka halaman (Lirik, Antrean) tanpa gerak. */
     pressAnimated: Boolean = false,
 ) {
-    val container = if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent
-    val tint = if (selected) MaterialTheme.colorScheme.onSecondaryContainer
+    val inv = invertedIconColor()
+    val container = if (selected) (if (inv != null) inv.copy(alpha = 0.16f) else MaterialTheme.colorScheme.secondaryContainer) else Color.Transparent
+    val tint = if (inv != null) inv
+    else if (selected) MaterialTheme.colorScheme.onSecondaryContainer
     else MaterialTheme.colorScheme.onSurfaceVariant
     val source = androidx.compose.runtime.remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
     Box(
