@@ -68,7 +68,7 @@ object SongRefs {
         }
         val text = raw.substring(0, idx).trimEnd()
         val items = ArrayList<AiRef>()
-        var pos = idx
+        var pos: Int = idx
         while (pos < raw.length) {
             val m = OPEN_RE.find(raw, pos) ?: break
             val tag = m.groupValues[1]
