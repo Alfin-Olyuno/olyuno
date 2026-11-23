@@ -106,7 +106,7 @@ fun OlyunoRoot(
     // libraryPage 4 = daftar Playlist saya, 5 = isi satu playlist (id-nya di sini).
     var localPlaylistId by rememberSaveable { mutableLongStateOf(-1L) }
     val localPlaylists by vm.localPlaylists.collectAsStateWithLifecycle()
-    // Halaman penuh dari tab Anda: -1 tidak ada, 0 Ekualiser, 1 Riwayat lagu, 2 Informasi, 3 Pengaturan, 4 Tampilan, 11 Statistik & Rekap (satu halaman), 14 Streak, 15 Cari lagu (suara).
+    // Halaman penuh dari tab Anda: -1 tidak ada, 0 Ekualiser, 1 Riwayat lagu, 2 Informasi, 3 Pengaturan, 4 Tampilan, 11 Statistik & Rekap (satu halaman), 14 Streak, 15 Cari lagu (suara), 16 Tanya AI.
     var andaPage by rememberSaveable { mutableIntStateOf(-1) }
     // Halaman Tentang Olyuno (andaPage == 12) bisa dibuka dari tab Anda atau Pengaturan; ini halaman tujuan saat kembali (-1 atau 3).
     var aboutBackTo by rememberSaveable { mutableIntStateOf(-1) }
@@ -126,6 +126,16 @@ fun OlyunoRoot(
         playerSheet.rangePx = with(density) { screenH.dp.toPx() }
     }
     LaunchedEffect(showPlayer) { playerSheet.animateTo(showPlayer) }
+    // Permintaan "Tanya AI" dari menu lirik di layar pemutar: tutup pemutar, buka halamannya, mulai analisis.
+    val analysisRequest by vm.lyricsAnalysisRequest.collectAsStateWithLifecycle()
+    LaunchedEffect(analysisRequest) {
+        analysisRequest?.let { song ->
+            showPlayer = false
+            andaPage = 16
+            vm.askAboutPlayingSong(song)
+            vm.consumeLyricsAnalysisRequest()
+        }
+    }
     val snackbar = remember { SnackbarHostState() }
     val currentId = player.current?.videoId
 
@@ -291,6 +301,7 @@ fun OlyunoRoot(
                         onImport = { importLauncher.launch(arrayOf("*/*")) },
                         onOpenEqualizer = { andaPage = 0 },
                         onOpenFindSong = { andaPage = 15 },
+                        onOpenLyricsAnalysis = { andaPage = 16 },
                         onOpenHistory = { andaPage = 1 },
                         onOpenStats = { andaPage = 11 },
                         onOpenStreak = { andaPage = 14 },
@@ -427,6 +438,17 @@ fun OlyunoRoot(
                 state = eqState,
                 player = player,
                 onBack = { andaPage = -1 },
+                onOpenPlayer = { showPlayer = true },
+            )
+        }
+        PageTransition(visible = andaPage == 16) {
+            LyricsAnalysisPage(
+                vm = vm,
+                player = player,
+                onBack = {
+                    andaPage = -1
+                    vm.newChat()
+                },
                 onOpenPlayer = { showPlayer = true },
             )
         }

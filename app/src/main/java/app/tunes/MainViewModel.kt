@@ -310,6 +310,126 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         return edits + (a.length - i) + (b.length - j) <= 1
     }
 
+    // ------------------------------------------------ Tanya AI
+    /** Pesan obrolan Tanya AI. fromUser=false = jawaban AI. */
+    data class ChatMessage(val fromUser: Boolean, val text: String)
+
+    val aiPrefs get() = container.aiPrefs
+    /** Riwayat percakapan Tanya AI (terbaru di atas). */
+    val bedahHistory: StateFlow<List<app.tunes.data.BedahEntry>> get() = container.bedahHistory.entries
+
+    private val _chat = MutableStateFlow<List<ChatMessage>>(emptyList())
+    val chat: StateFlow<List<ChatMessage>> = _chat.asStateFlow()
+    private val _chatBusy = MutableStateFlow(false)
+    val chatBusy: StateFlow<Boolean> = _chatBusy.asStateFlow()
+    private val _chatError = MutableStateFlow<app.tunes.ai.AiErrorKind?>(null)
+    val chatError: StateFlow<app.tunes.ai.AiErrorKind?> = _chatError.asStateFlow()
+    /** ID percakapan yang sedang dibuka; null = obrolan baru yang belum ada pesan. */
+    private val _convoId = MutableStateFlow<String?>(null)
+    val convoId: StateFlow<String?> = _convoId.asStateFlow()
+    private var chatJob: Job? = null
+
+    /** Permintaan dari luar halaman (menu lirik di layar pemutar): OlyunoRoot membuka halaman, lalu lagunya ditanyakan. */
+    private val _lyricsAnalysisRequest = MutableStateFlow<SongItem?>(null)
+    val lyricsAnalysisRequest: StateFlow<SongItem?> = _lyricsAnalysisRequest.asStateFlow()
+    fun requestLyricsAnalysis(song: SongItem) { _lyricsAnalysisRequest.value = song }
+    fun consumeLyricsAnalysisRequest() { _lyricsAnalysisRequest.value = null }
+
+    private fun answerLang(): String =
+        if (app.tunes.i18n.I18n.effective == app.tunes.i18n.AppLanguage.English) "English" else "Bahasa Indonesia"
+
+    /** Obrolan baru dengan pertanyaan pembuka tentang [song] (dari menu lirik di layar pemutar). */
+    fun askAboutPlayingSong(song: SongItem) {
+        newChat()
+        sendMessage(
+            if (app.tunes.i18n.I18n.effective == app.tunes.i18n.AppLanguage.English) {
+                "Explain the meaning of \"${song.title}\" by ${song.artist}."
+            } else {
+                "Jelaskan makna lagu \"${song.title}\" oleh ${song.artist}."
+            },
+        )
+    }
+
+    /** Kirim pertanyaan; percakapan dibuat otomatis pada pesan pertama. */
+    fun sendMessage(text: String) {
+        val q = text.trim()
+        if (q.isEmpty() || _chatBusy.value) return
+        if (_convoId.value == null) _convoId.value = java.util.UUID.randomUUID().toString()
+        _chat.value = _chat.value + ChatMessage(true, q)
+        saveConversation()
+        answer()
+    }
+
+    /** Ulangi jawaban untuk pertanyaan terakhir yang gagal (mis. setelah kunci API diisi). */
+    fun retryAnswer() {
+        if (_chatBusy.value || _chat.value.lastOrNull()?.fromUser != true) return
+        answer()
+    }
+
+    private fun answer() {
+        val all = _chat.value
+        val q = all.lastOrNull()?.takeIf { it.fromUser }?.text ?: return
+        val history = all.dropLast(1).map { it.fromUser to it.text }
+        val model = aiPrefs.model.value
+        _chatError.value = null
+        _chatBusy.value = true
+        chatJob?.cancel()
+        chatJob = viewModelScope.launch {
+            try {
+                val reply = container.lyricsAnalyzer.chat(
+                    aiPrefs.apiKey.value, aiPrefs.idOf(model), history, q, answerLang(),
+                )
+                _chat.value = _chat.value + ChatMessage(false, reply)
+                saveConversation()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: app.tunes.ai.AiException) {
+                _chatError.value = e.kind
+            } catch (e: Exception) {
+                _chatError.value = app.tunes.ai.AiErrorKind.Server
+            } finally {
+                _chatBusy.value = false
+            }
+        }
+    }
+
+    private fun saveConversation() {
+        val id = _convoId.value ?: return
+        val msgs = _chat.value
+        val first = msgs.firstOrNull { it.fromUser }?.text?.replace('\n', ' ')?.trim().orEmpty()
+        val entry = app.tunes.data.BedahEntry(
+            id, first.take(80), "", 0, null,
+            aiPrefs.model.value.name, System.currentTimeMillis(), msgs.map { it.fromUser to it.text },
+        )
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) { container.bedahHistory.upsert(entry) }
+    }
+
+    /** Mulai obrolan kosong. */
+    fun newChat() {
+        chatJob?.cancel()
+        _convoId.value = null
+        _chat.value = emptyList()
+        _chatBusy.value = false
+        _chatError.value = null
+    }
+
+    /** Buka percakapan dari riwayat. */
+    fun openConversation(e: app.tunes.data.BedahEntry) {
+        chatJob?.cancel()
+        _convoId.value = e.videoId
+        _chat.value = e.chat.map { ChatMessage(it.first, it.second) }
+        _chatBusy.value = false
+        _chatError.value = null
+    }
+
+    fun deleteBedahEntry(id: String) {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) { container.bedahHistory.remove(id) }
+    }
+
+    fun clearBedahHistory() {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) { container.bedahHistory.clear() }
+    }
+
     fun clearFind() {
         findJob?.cancel()
         _findState.value = SearchState.Idle

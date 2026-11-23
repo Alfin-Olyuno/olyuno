@@ -803,6 +803,10 @@ private fun LyricsPage(
                     shareLyrics(lyricsContext, song.title, song.artist, text)
                 }
             },
+            onAnalyze = {
+                showMenuSheet = false
+                vm.requestLyricsAnalysis(song)
+            },
             onDismiss = { showMenuSheet = false },
         )
     }

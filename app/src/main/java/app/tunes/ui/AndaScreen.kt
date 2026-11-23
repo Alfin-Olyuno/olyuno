@@ -26,6 +26,7 @@ import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Insights
 import androidx.compose.material.icons.rounded.LocalFireDepartment
+import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Mail
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.Settings
@@ -65,6 +66,7 @@ fun AndaScreen(
     onImport: () -> Unit,
     onOpenEqualizer: () -> Unit,
     onOpenFindSong: () -> Unit,
+    onOpenLyricsAnalysis: () -> Unit,
     onOpenHistory: () -> Unit,
     onOpenStats: () -> Unit,
     onOpenStreak: () -> Unit,
@@ -103,6 +105,8 @@ fun AndaScreen(
         // Menu dipisah per kelompok, tiap kelompok satu kartu (gaya sama dengan halaman Pengaturan).
         MenuGroup {
             MenuItem(Icons.Rounded.Mic, t("Cari lagu"), onOpenFindSong)
+            MenuDivider()
+            MenuItem(Icons.Rounded.AutoAwesome, t("Tanya AI"), onOpenLyricsAnalysis)
             MenuDivider()
             MenuItem(Icons.Rounded.History, t("Riwayat lagu"), onOpenHistory)
             MenuDivider()

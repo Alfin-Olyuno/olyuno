@@ -78,13 +78,17 @@ fun MiniPlayerScaffold(
     vm: MainViewModel,
     player: PlayerState,
     onOpenPlayer: () -> Unit,
+    /** false = tanpa pemutar mini melayang di bawah (mis. halaman dengan kolom input tetap di bawah). */
+    showMiniPlayer: Boolean = true,
+    /** false = tanpa blur / pemudaran warna di tepi atas layar. */
+    showTopBlur: Boolean = true,
     content: @Composable () -> Unit,
 ) {
     val backdrop = rememberGlassBackdrop()
     val base = LocalGlass.current
     val glass = remember(base.enabled, backdrop) { GlassConfig(base.enabled, backdrop) }
     val navBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
-    val inset = navBottom + if (player.current != null) MINI_AREA else 0.dp
+    val inset = navBottom + if (player.current != null && showMiniPlayer) MINI_AREA else 0.dp
 
     val density = LocalDensity.current
     val statusTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
@@ -104,7 +108,7 @@ fun MiniPlayerScaffold(
                         .nestedScroll(bars)
                         // Hanya halaman dengan bar judul: isinya menjangkau tepi atas layar (di belakang status bar + bar).
                         .then(
-                            if (topBar != null) {
+                            if (topBar != null && showTopBlur) {
                                 Modifier.topBlurSource(solid = (barHeight - 10.dp).coerceAtLeast(0.dp), fade = 24.dp)
                             } else {
                                 Modifier
@@ -121,7 +125,9 @@ fun MiniPlayerScaffold(
                     }
                 }
                 // Blur berwarna di atas layar: isi yang digulir ke atas dikaburkan di belakang status bar / bar judul.
-                if (topBar != null) {
+                if (!showTopBlur) {
+                    // Tanpa blur atas.
+                } else if (topBar != null) {
                     TopScreenBlurForBar(barHeight = barHeight, modifier = Modifier.align(Alignment.TopCenter))
                 } else {
                     TopScreenBlur(modifier = Modifier.align(Alignment.TopCenter))
@@ -133,15 +139,17 @@ fun MiniPlayerScaffold(
                             .onSizeChanged { barHeight = with(density) { it.height.toDp() } },
                     ) { topBar() }
                 }
-                CollapsingMiniPlayer(
-                    player = player,
-                    collapsed = bars.collapsed,
-                    onOpenPlayer = onOpenPlayer,
-                    onToggle = vm::togglePlay,
-                    onNext = vm::next,
-                    onPrevious = vm::previousItem,
-                    modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding(),
-                )
+                if (showMiniPlayer) {
+                    CollapsingMiniPlayer(
+                        player = player,
+                        collapsed = bars.collapsed,
+                        onOpenPlayer = onOpenPlayer,
+                        onToggle = vm::togglePlay,
+                        onNext = vm::next,
+                        onPrevious = vm::previousItem,
+                        modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding(),
+                    )
+                }
             }
         }
     }
@@ -156,6 +164,8 @@ fun SubPage(
     player: PlayerState,
     onBack: () -> Unit,
     onOpenPlayer: () -> Unit,
+    showMiniPlayer: Boolean = true,
+    showTopBlur: Boolean = true,
     content: @Composable () -> Unit,
 ) {
     PageBackHandler(onBack = onBack)
@@ -178,6 +188,8 @@ fun SubPage(
             vm = vm,
             player = player,
             onOpenPlayer = onOpenPlayer,
+            showMiniPlayer = showMiniPlayer,
+            showTopBlur = showTopBlur,
             content = content,
         )
     }
