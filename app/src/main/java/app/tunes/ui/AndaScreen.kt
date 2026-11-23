@@ -24,10 +24,10 @@ import androidx.compose.material.icons.rounded.FileDownload
 import androidx.compose.material.icons.rounded.FileUpload
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Info
-import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Insights
 import androidx.compose.material.icons.rounded.LocalFireDepartment
 import androidx.compose.material.icons.rounded.Mail
+import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -54,7 +54,7 @@ import app.tunes.i18n.t
 
 /**
  * Halaman tab Anda. Paling atas bagian "Akun Anda": "Masuk dengan Google" (belum login) atau nama akun + "Keluar".
- * Di bawahnya: menu dalam tiga kartu (Riwayat+Statistik+Rekap+Streak+Ekualiser, Ekspor+Impor, Pengaturan+Informasi). Keluar juga ada di Pengaturan.
+ * Di bawahnya: menu dalam tiga kartu (Riwayat+Statistik & Rekap+Streak+Ekualiser, Ekspor+Impor, Pengaturan+Informasi). Keluar juga ada di Pengaturan.
  */
 @Composable
 fun AndaScreen(
@@ -64,9 +64,9 @@ fun AndaScreen(
     onExport: () -> Unit,
     onImport: () -> Unit,
     onOpenEqualizer: () -> Unit,
+    onOpenFindSong: () -> Unit,
     onOpenHistory: () -> Unit,
     onOpenStats: () -> Unit,
-    onOpenRekap: () -> Unit,
     onOpenStreak: () -> Unit,
     onOpenInfo: () -> Unit,
     onOpenSettings: () -> Unit,
@@ -102,11 +102,11 @@ fun AndaScreen(
         }
         // Menu dipisah per kelompok, tiap kelompok satu kartu (gaya sama dengan halaman Pengaturan).
         MenuGroup {
+            MenuItem(Icons.Rounded.Mic, t("Cari lagu"), onOpenFindSong)
+            MenuDivider()
             MenuItem(Icons.Rounded.History, t("Riwayat lagu"), onOpenHistory)
             MenuDivider()
-            MenuItem(Icons.Rounded.Insights, t("Statistik"), onOpenStats)
-            MenuDivider()
-            MenuItem(Icons.Rounded.AutoAwesome, t("Rekap"), onOpenRekap)
+            MenuItem(Icons.Rounded.Insights, t("Statistik & Rekap"), onOpenStats)
             MenuDivider()
             MenuItem(Icons.Rounded.LocalFireDepartment, t("Streak"), onOpenStreak)
             MenuDivider()

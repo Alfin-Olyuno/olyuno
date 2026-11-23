@@ -43,6 +43,10 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -182,6 +186,134 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun removeSearchHistory(q: String) = container.searchHistory.remove(q)
+
+    // ------------------------------------------------ Cari lagu (lewat suara)
+    // Terpisah dari state pencarian biasa supaya kolom Cari di tab Cari tidak ikut berubah.
+    private val _findState = MutableStateFlow<SearchState>(SearchState.Idle)
+    val findState: StateFlow<SearchState> = _findState.asStateFlow()
+    private var findJob: Job? = null
+
+    /**
+     * Cari lagu dari teks hasil kenali suara. [alternatives] = tebakan lain dari pengenal suara (kalau ada).
+     * Langkah: cari dengan beberapa versi kueri lalu gabungkan peringkatnya, buang cover / karaoke / remix
+     * dari atas, lalu cocokkan teks dengan lirik asli kandidat teratas supaya salah dengar kecil tetap ketemu.
+     */
+    fun findSongByText(q: String, alternatives: List<String> = emptyList()) {
+        val text = q.trim()
+        if (text.isEmpty()) return
+        findJob?.cancel()
+        findJob = viewModelScope.launch {
+            _findState.value = SearchState.Loading
+            _findState.value = try {
+                val songs = rankFindResults(text, alternatives)
+                if (songs.isEmpty()) SearchState.Error(t("Tidak ada hasil untuk \"%s\"", text))
+                else SearchState.Results(SearchResults(emptyList(), songs, emptyList(), emptyList(), emptyList()))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                SearchState.Error(e.userMessage("Gagal mencari"))
+            }
+        }
+    }
+
+    private suspend fun rankFindResults(primary: String, alternatives: List<String>): List<SongItem> = coroutineScope {
+        val heards = (listOf(primary) + alternatives.map { it.trim() })
+            .filter { it.isNotEmpty() }
+            .distinctBy { it.lowercase() }
+            .take(3)
+        val queries = buildList {
+            add(primary)
+            add("$primary lirik")
+            heards.drop(1).forEach { add(it) }
+        }.distinct().take(4)
+
+        // 1) Beberapa kueri sekaligus; lagu yang muncul tinggi di beberapa kueri mendapat skor lebih besar.
+        val outcomes = queries.map { q -> async { runCatching { innerTube.searchAll(q) } } }.awaitAll()
+        if (outcomes.all { it.isFailure }) throw outcomes.first().exceptionOrNull() ?: java.io.IOException("search failed")
+        val fused = LinkedHashMap<String, Double>()
+        val byId = HashMap<String, SongItem>()
+        val heardLower = primary.lowercase()
+        outcomes.forEach { outcome ->
+            val r = outcome.getOrNull() ?: return@forEach
+            val list = (r.top.filterIsInstance<app.tunes.innertube.SearchHit.Track>().map { it.song } + r.songs)
+                .distinctBy { it.videoId }
+            list.take(12).forEachIndexed { rank, song ->
+                byId.putIfAbsent(song.videoId, song)
+                fused[song.videoId] = (fused[song.videoId] ?: 0.0) + 1.0 / (rank + 3)
+            }
+        }
+        if (byId.isEmpty()) return@coroutineScope emptyList()
+        // Versi cover / karaoke / remix / live diturunkan, kecuali memang itu yang diucapkan.
+        val noise = listOf("cover", "karaoke", "instrumental", "remix", "live", "sped up", "slowed", "nightcore", "8d", "reaction")
+        val maxFused = fused.values.maxOrNull() ?: 1.0
+        val base = fused.mapValues { (id, v) ->
+            val title = byId[id]!!.title.lowercase()
+            val penalty = if (noise.any { it in title && it !in heardLower }) 0.6 else 1.0
+            v / maxFused * penalty
+        }
+        val ordered = base.entries.sortedByDescending { it.value }.map { it.key }
+
+        // 2) Cocokkan dengan lirik asli kandidat teratas (hanya LRCLIB: cepat, satu layanan).
+        val top = ordered.take(6)
+        val sims = top.map { id ->
+            async {
+                id to withTimeoutOrNull(4_000) { lyricSimilarity(heards, byId[id]!!) }
+            }
+        }.awaitAll().toMap()
+        val scored = top.sortedByDescending { id ->
+            val sim = sims[id]
+            0.4 * (base[id] ?: 0.0) + (if (sim != null) 0.6 * sim else 0.2)
+        }
+        (scored + ordered.drop(6)).map { byId[it]!! }
+    }
+
+    /** Seberapa mirip teks yang terdengar dengan lirik lagu (0..1), atau null kalau lirik tidak ada. */
+    private suspend fun lyricSimilarity(heards: List<String>, song: SongItem): Double? {
+        val state = container.lyrics.load(song, LyricsSource.Lrclib)
+        val ready = state as? LyricsState.Ready ?: return null
+        val lyricTokens = tokenize(ready.lines.joinToString(" ") { it.text })
+        if (lyricTokens.isEmpty()) return null
+        val set = lyricTokens.toHashSet()
+        val bigrams = lyricTokens.zipWithNext { a, b -> "$a $b" }.toHashSet()
+        return heards.maxOf { h ->
+            val ht = tokenize(h)
+            if (ht.isEmpty()) return@maxOf 0.0
+            val uni = ht.count { w -> w in set || (w.length >= 4 && set.any { near(it, w) }) }.toDouble() / ht.size
+            if (ht.size < 2) uni
+            else {
+                val bi = ht.zipWithNext { a, b -> "$a $b" }
+                val biCov = bi.count { it in bigrams }.toDouble() / bi.size
+                0.6 * biCov + 0.4 * uni
+            }
+        }
+    }
+
+    private fun tokenize(x: String): List<String> =
+        x.lowercase().split(Regex("[^\\p{L}\\p{N}]+")).filter { it.isNotEmpty() }
+
+    /** Kata dianggap sama kalau beda paling banyak satu huruf (salah dengar kecil). */
+    private fun near(a: String, b: String): Boolean {
+        if (a == b) return true
+        if (kotlin.math.abs(a.length - b.length) > 1 || a.length < 4) return false
+        var i = 0
+        var j = 0
+        var edits = 0
+        while (i < a.length && j < b.length) {
+            if (a[i] == b[j]) { i++; j++; continue }
+            if (++edits > 1) return false
+            when {
+                a.length > b.length -> i++
+                a.length < b.length -> j++
+                else -> { i++; j++ }
+            }
+        }
+        return edits + (a.length - i) + (b.length - j) <= 1
+    }
+
+    fun clearFind() {
+        findJob?.cancel()
+        _findState.value = SearchState.Idle
+    }
     fun clearSearchHistory() = container.searchHistory.clear()
 
     // ---- Penyimpanan (halaman Pengaturan > Penyimpanan)

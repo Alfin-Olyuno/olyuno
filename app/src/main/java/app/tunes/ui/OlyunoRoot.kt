@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.LibraryMusic
+import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material.icons.rounded.Search
@@ -105,7 +106,7 @@ fun OlyunoRoot(
     // libraryPage 4 = daftar Playlist saya, 5 = isi satu playlist (id-nya di sini).
     var localPlaylistId by rememberSaveable { mutableLongStateOf(-1L) }
     val localPlaylists by vm.localPlaylists.collectAsStateWithLifecycle()
-    // Halaman penuh dari tab Anda: -1 tidak ada, 0 Ekualiser, 1 Riwayat lagu, 2 Informasi, 3 Pengaturan, 4 Tampilan, 11 Statistik & Rekap, 15 Rekap (halaman yang sama, dibuka di kartu Rekap), 14 Streak.
+    // Halaman penuh dari tab Anda: -1 tidak ada, 0 Ekualiser, 1 Riwayat lagu, 2 Informasi, 3 Pengaturan, 4 Tampilan, 11 Statistik & Rekap (satu halaman), 14 Streak, 15 Cari lagu (suara).
     var andaPage by rememberSaveable { mutableIntStateOf(-1) }
     // Halaman Tentang Olyuno (andaPage == 12) bisa dibuka dari tab Anda atau Pengaturan; ini halaman tujuan saat kembali (-1 atau 3).
     var aboutBackTo by rememberSaveable { mutableIntStateOf(-1) }
@@ -289,9 +290,9 @@ fun OlyunoRoot(
                         },
                         onImport = { importLauncher.launch(arrayOf("*/*")) },
                         onOpenEqualizer = { andaPage = 0 },
+                        onOpenFindSong = { andaPage = 15 },
                         onOpenHistory = { andaPage = 1 },
                         onOpenStats = { andaPage = 11 },
-                        onOpenRekap = { andaPage = 15 },
                         onOpenStreak = { andaPage = 14 },
                         onOpenInfo = { andaPage = 2 },
                         onOpenSettings = { andaPage = 3 },
@@ -311,6 +312,16 @@ fun OlyunoRoot(
                 visible = (tab == 0 || tab == 1) && !barsCollapse.collapsed && !baseCovered,
                 bottomInset = padding.calculateBottomPadding(),
                 onClick = { if (tab == 0) vm.refreshHome() else vm.refreshSearch() },
+                modifier = Modifier.align(androidx.compose.ui.Alignment.BottomEnd),
+            )
+            // Tombol mikrofon tepat di atas tombol muat ulang: membuka halaman Cari lagu (sama dengan menu di tab Anda).
+            RefreshFab(
+                visible = (tab == 0 || tab == 1) && !barsCollapse.collapsed && !baseCovered,
+                bottomInset = padding.calculateBottomPadding(),
+                onClick = { andaPage = 15 },
+                icon = Icons.Rounded.Mic,
+                description = t("Cari lagu"),
+                slot = 1,
                 modifier = Modifier.align(androidx.compose.ui.Alignment.BottomEnd),
             )
             }
@@ -419,6 +430,18 @@ fun OlyunoRoot(
                 onOpenPlayer = { showPlayer = true },
             )
         }
+        PageTransition(visible = andaPage == 15) {
+            SongFinderPage(
+                vm = vm,
+                player = player,
+                currentId = currentId,
+                onBack = {
+                    andaPage = -1
+                    vm.clearFind()
+                },
+                onOpenPlayer = { showPlayer = true },
+            )
+        }
         PageTransition(visible = andaPage == 1) {
             SongHistoryPage(
                 vm = vm,
@@ -430,7 +453,7 @@ fun OlyunoRoot(
         }
 
         // Statistik: tertutup saat halaman album / playlist / artis dibuka dari daftarnya.
-        PageTransition(visible = andaPage == 11 || andaPage == 15, covered = openCollection != null) {
+        PageTransition(visible = andaPage == 11, covered = openCollection != null) {
             StatisticsPage(
                 vm = vm,
                 player = player,

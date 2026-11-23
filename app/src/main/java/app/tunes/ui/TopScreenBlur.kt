@@ -1,6 +1,5 @@
 package app.tunes.ui
 
-import android.os.Build
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
@@ -14,14 +13,15 @@ import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Paint
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.BlendMode
-import androidx.compose.ui.graphics.BlurEffect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.CompositingStrategy
-import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.drawscope.clipRect
-import androidx.compose.ui.graphics.drawscope.inset
+import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.rememberGraphicsLayer
@@ -29,30 +29,36 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.coerceAtLeast
 import androidx.compose.ui.unit.dp
+import kotlin.math.PI
+import kotlin.math.cos
+import kotlin.math.sin
 
 /**
  * Blur di ATAS LAYAR (area status bar / bar judul), dipakai semua halaman.
  *
- * KUNCI ANTI-BUG: blur digambar DI DALAM container isi halaman itu sendiri ([topBlurSource]), dalam satu
- * pass gambar yang sama. Isi direkam sekali ke satu layer; layer yang sama digambar normal, lalu sekali lagi
- * (diburamkan) di pita atas. Tidak ada komponen terpisah yang menebak posisi salinan terhadap isi aslinya,
- * jadi salinan tidak bisa basi / bergeser / menggandakan diri saat halaman digulir, bergeser, atau dibuka-tutup.
+ * Blur ini buatan sendiri, bukan RenderEffect / blur bawaan sistem, jadi sama di semua versi Android dan tidak
+ * bergantung pada cache layer milik sistem. Itu penyebab bug "salinan basi": layer ber-RenderEffect yang disimpan
+ * antar frame di beberapa HP tidak ikut diperbarui saat halaman digulir, sehingga isi lama menggantung di pita atas.
  *
- * Pita blur: paling kabur di atas, memudar mulus ke bawah (blur bertahap), lalu dipucatkan tipis oleh warna
- * latar tema ([TopScreenBlur], hanya gradien warna, tanpa salinan isi). Di bawah Android 12 tidak ada blur:
- * hanya pemucatan.
+ * Cara kerja ([topBlurSource]): isi halaman direkam sekali per frame ke satu layer. Di bawah pita, layer itu
+ * digambar biasa. Di dalam pita, isi tajam dihapus oleh gradien, lalu diganti rata-rata beberapa salinan layer
+ * yang sama yang digeser sedikit ke segala arah (blur gaussian kasar). Semuanya memakai saveLayer sesaat yang
+ * dibuat dan dibuang di frame itu juga: tidak ada layer yang disimpan, jadi tidak ada yang bisa basi.
+ *
+ * Pita blur: paling kabur di atas, memudar mulus ke bawah, lalu dipucatkan tipis oleh warna latar tema
+ * ([TopScreenBlur], hanya gradien warna, tanpa salinan isi).
  */
 
-/** Saklar blur atas-layar (Android 12+). false = hanya pemucat warna latar. */
+/** Saklar blur atas-layar. false = hanya pemucat warna latar. */
 private const val TOP_BLUR_ENABLED = true
 
-/** Kekuatan blur di bagian paling atas pita. */
-private val TOP_BLUR_RADIUS = 10.dp
+/** Jangkauan blur (jari-jari sebaran salinan) di bagian paling atas pita. */
+private val TOP_BLUR_RADIUS = 9.dp
 
 /** Sedikit warna aksen di pemucat (0 = murni warna latar). */
 private const val TOP_TINT_MIX = 0.03f
 
-/** Kepekatan pemucat di bagian paling atas, dengan blur / tanpa blur (Android di bawah 12). */
+/** Kepekatan pemucat di bagian paling atas, dengan blur / tanpa blur (saklar dimatikan). */
 private const val TOP_TINT_ALPHA = 0.18f
 private const val TOP_TINT_ALPHA_NO_BLUR = 0.30f
 
@@ -66,17 +72,34 @@ private val TOP_FADE = 14.dp
  */
 val LocalTabTopInset = compositionLocalOf { 0.dp }
 
-/** True kalau blur atas-layar aktif dan perangkat bisa memblur isi (Android 12+). */
-fun topBlurSupported(): Boolean = TOP_BLUR_ENABLED && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+/** True kalau blur atas-layar aktif. Blurnya buatan sendiri, jadi berlaku di semua versi Android. */
+fun topBlurSupported(): Boolean = TOP_BLUR_ENABLED
 
 /** Tinggi status bar. */
 @Composable
 fun statusBarHeight(): Dp = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
 
+/** Satu salinan geser untuk blur: [dx], [dy] dalam piksel, [weight] = bobot rata-rata (total semua = 1). */
+private class BlurTap(val dx: Float, val dy: Float, val weight: Float)
+
+/** Tengah + 6 salinan di lingkaran dalam + 6 di lingkaran luar (diputar 30°): pendekatan gaussian dengan 13 salinan. */
+private fun buildBlurTaps(radiusPx: Float): List<BlurTap> {
+    val taps = ArrayList<BlurTap>(13)
+    taps += BlurTap(0f, 0f, 0.25f)
+    for (i in 0 until 6) {
+        val a = i * PI / 3.0
+        taps += BlurTap((cos(a) * radiusPx * 0.5).toFloat(), (sin(a) * radiusPx * 0.5).toFloat(), 0.5f / 6f)
+    }
+    for (i in 0 until 6) {
+        val a = i * PI / 3.0 + PI / 6.0
+        taps += BlurTap((cos(a) * radiusPx).toFloat(), (sin(a) * radiusPx).toFloat(), 0.25f / 6f)
+    }
+    return taps
+}
+
 /**
  * Pasang di container isi halaman yang menjangkau tepi ATAS layar (ujung atas container = ujung atas layar).
  * [solid] = tinggi bagian atas yang diburamkan penuh; di bawahnya blur memudar sepanjang [fade].
- * Tanpa efek di bawah Android 12.
  *
  * Sengaja TIDAK memegang warna apa pun (latar, tema, tint): bagian atas isi yang tajam dihapus lewat gradien,
  * lalu salinan buramnya digambar di atas latar halaman yang asli. Jadi saat tema / warna tampilan diganti,
@@ -90,18 +113,11 @@ fun Modifier.topBlurSource(solid: Dp, fade: Dp = TOP_FADE): Modifier {
     val solidPx = with(density) { solid.coerceAtLeast(0.dp).toPx() }
     val fadePx = with(density) { fade.toPx() }
     val contentLayer = rememberGraphicsLayer()
-    val sharpBand = rememberGraphicsLayer()
-    val blurBand = rememberGraphicsLayer()
-    remember(sharpBand, blurBand, blurPx) {
-        blurBand.renderEffect = BlurEffect(blurPx, blurPx, TileMode.Clamp)
-        // Offscreen: gradien (DstOut / DstIn) hanya memengaruhi isi layer ini, bukan halaman di belakangnya.
-        sharpBand.compositingStrategy = androidx.compose.ui.graphics.layer.CompositingStrategy.Offscreen
-        blurBand.compositingStrategy = androidx.compose.ui.graphics.layer.CompositingStrategy.Offscreen
-        sharpBand.clip = true
-        blurBand.clip = true
-    }
+    val taps = remember(blurPx) { buildBlurTaps(blurPx) }
+    val plain = remember { Paint() }
+    val tapPaint = remember { Paint().apply { blendMode = BlendMode.Plus } }
     return this.drawWithContent {
-        // 1) Isi halaman direkam SEKALI.
+        // 1) Isi halaman direkam SEKALI per frame.
         contentLayer.record { this@drawWithContent.drawContent() }
 
         val h = (solidPx + fadePx).coerceAtMost(size.height)
@@ -110,27 +126,37 @@ fun Modifier.topBlurSource(solid: Dp, fade: Dp = TOP_FADE): Modifier {
             return@drawWithContent
         }
         val solidFraction = (solidPx / h).coerceIn(0f, 1f)
+        val bandSize = Size(size.width, h)
+        val bounds = Rect(0f, 0f, size.width, h)
         val mask = Brush.verticalGradient(
             0f to Color.Black,
             solidFraction to Color.Black,
             1f to Color.Transparent,
+            startY = 0f,
+            endY = h,
         )
 
         // 2) Di bawah pita: isi tajam seperti biasa.
         clipRect(top = h) { drawLayer(contentLayer) }
 
-        // 3) Di dalam pita (layer yang SAMA, frame yang sama): isi tajam dihapus makin ke atas, diganti salinan buramnya.
-        inset(0f, 0f, 0f, size.height - h) {
-            sharpBand.record {
-                drawLayer(contentLayer)
-                drawRect(brush = mask, blendMode = BlendMode.DstOut)
+        drawIntoCanvas { canvas ->
+            // 3a) Di dalam pita: isi tajam dihapus makin ke atas (DstOut).
+            canvas.saveLayer(bounds, plain)
+            drawLayer(contentLayer)
+            drawRect(brush = mask, size = bandSize, blendMode = BlendMode.DstOut)
+            canvas.restore()
+
+            // 3b) Salinan buram: rata-rata salinan layer yang sama (tiap salinan ditambah dengan bobotnya, BlendMode.Plus),
+            // lalu hanya yang di dalam mask yang tampil (DstIn). Semua layer sesaat, dibuang di akhir frame ini.
+            canvas.saveLayer(bounds, plain)
+            for (tap in taps) {
+                tapPaint.alpha = tap.weight
+                canvas.saveLayer(bounds, tapPaint)
+                translate(tap.dx, tap.dy) { drawLayer(contentLayer) }
+                canvas.restore()
             }
-            drawLayer(sharpBand)
-            blurBand.record {
-                drawLayer(contentLayer)
-                drawRect(brush = mask, blendMode = BlendMode.DstIn)
-            }
-            drawLayer(blurBand)
+            drawRect(brush = mask, size = bandSize, blendMode = BlendMode.DstIn)
+            canvas.restore()
         }
     }
 }

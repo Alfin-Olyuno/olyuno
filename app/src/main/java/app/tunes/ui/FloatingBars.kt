@@ -586,13 +586,18 @@ fun RefreshFab(
     bottomInset: Dp,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    /** Ikon tombol; bawaannya panah menyilang (muat ulang). */
+    icon: ImageVector = Icons.Rounded.Shuffle,
+    description: String = t("Muat ulang"),
+    /** 0 = paling bawah (tepat di atas pemutar mini), 1 = satu tombol di atasnya, dst. */
+    slot: Int = 0,
 ) {
     val smooth = LocalSmoothAnim.current
     val glass = LocalGlass.current
     val shown by animateFloatAsState(
         targetValue = if (visible) 1f else 0f,
         animationSpec = if (smooth) tween(if (visible) 280 else 220, easing = FastOutSlowInEasing) else snap(),
-        label = "refreshFab",
+        label = "refreshFab$slot",
     )
     val spin = remember { Animatable(0f) }
     val scope = rememberCoroutineScope()
@@ -600,7 +605,7 @@ fun RefreshFab(
 
     Box(
         modifier
-            .padding(end = SIDE.dp, bottom = bottomInset + GAP.dp)
+            .padding(end = SIDE.dp, bottom = bottomInset + GAP.dp + ((FAB + GAP) * slot).dp)
             .size(FAB.dp)
             .graphicsLayer {
                 // Hilang = meluncur ke bawah (melewati bilah di bawahnya) + memudar.
@@ -620,8 +625,8 @@ fun RefreshFab(
         contentAlignment = Alignment.Center,
     ) {
         Icon(
-            Icons.Rounded.Shuffle,
-            contentDescription = t("Muat ulang"),
+            icon,
+            contentDescription = description,
             tint = MaterialTheme.colorScheme.primary,
             modifier = Modifier.graphicsLayer { rotationZ = spin.value },
         )
