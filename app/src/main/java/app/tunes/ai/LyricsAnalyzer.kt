@@ -1,6 +1,9 @@
 package app.tunes.ai
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -190,6 +193,103 @@ class LyricsAnalyzer(cacheDir: File) {
         }
     }
 
+    /**
+     * Seperti [chat], tapi jawaban dialirkan (streaming): [onText] dipanggil berulang dengan SELURUH teks yang sudah
+     * diterima sejauh ini (bukan hanya potongan baru), dari thread IO. Mengembalikan teks akhir.
+     * Gangguan sementara dicoba ulang sekali, hanya kalau belum ada teks yang sempat diterima.
+     */
+    suspend fun chatStream(
+        apiKey: String,
+        modelId: String,
+        history: List<Pair<Boolean, String>>,
+        question: String,
+        lang: String,
+        onText: (String) -> Unit,
+    ): String = withContext(Dispatchers.IO) {
+        if (apiKey.isBlank()) throw AiException(AiErrorKind.NoKey)
+        val contents = JSONArray()
+        history.takeLast(MAX_CHAT_TURNS).forEach { (fromUser, text) ->
+            contents.put(textContent(if (fromUser) "user" else "model", text.take(3000)))
+        }
+        contents.put(textContent("user", question.take(1500)))
+        val body = JSONObject()
+            .put("systemInstruction", textContent(null, SYSTEM_GENERAL + " Bahasa jawaban: " + lang + "."))
+            .put("contents", contents)
+            .put("generationConfig", JSONObject().put("temperature", 0.7))
+        var received = false
+        try {
+            stream(apiKey, modelId, body) { received = true; onText(it) }
+        } catch (e: AiException) {
+            if (!received && e.kind in RETRYABLE) stream(apiKey, modelId, body) { onText(it) } else throw e
+        }
+    }
+
+    /** Satu permintaan streaming (SSE). Membaca baris "data: {json}" satu per satu. */
+    private suspend fun stream(apiKey: String, modelId: String, body: JSONObject, onText: (String) -> Unit): String {
+        val req = Request.Builder()
+            .url("https://generativelanguage.googleapis.com/v1beta/models/${modelId.trim()}:streamGenerateContent?alt=sse")
+            .header("x-goog-api-key", apiKey)
+            .post(body.toString().toRequestBody("application/json".toMediaType()))
+            .build()
+        val call = client.newCall(req)
+        // Batalkan koneksi saat coroutine dibatalkan (mis. pengguna membuka obrolan lain), supaya tidak menggantung.
+        val handle = currentCoroutineContext()[Job]?.invokeOnCompletion(onCancelling = true) { call.cancel() }
+        val acc = StringBuilder()
+        var blocked = false
+        var finish = ""
+        try {
+            call.execute().use { resp ->
+                if (!resp.isSuccessful) {
+                    val raw = resp.body?.string().orEmpty()
+                    val msg = runCatching { JSONObject(raw).optJSONObject("error")?.optString("message") }.getOrNull().orEmpty()
+                    throw httpError(resp.code, msg)
+                }
+                val source = resp.body?.source() ?: throw AiException(AiErrorKind.Parse)
+                while (true) {
+                    currentCoroutineContext().ensureActive()
+                    val line = source.readUtf8Line() ?: break
+                    if (!line.startsWith("data:")) continue
+                    val data = line.removePrefix("data:").trim()
+                    if (data.isEmpty() || data == "[DONE]") continue
+                    val json = runCatching { JSONObject(data) }.getOrNull() ?: continue
+                    if (json.optJSONObject("promptFeedback")?.optString("blockReason").orEmpty().isNotEmpty()) blocked = true
+                    val cand = json.optJSONArray("candidates")?.optJSONObject(0) ?: continue
+                    cand.optString("finishReason").takeIf { it.isNotEmpty() }?.let { finish = it }
+                    val parts = cand.optJSONObject("content")?.optJSONArray("parts") ?: continue
+                    var delta = ""
+                    for (i in 0 until parts.length()) {
+                        val part = parts.optJSONObject(i) ?: continue
+                        if (part.optBoolean("thought", false)) continue
+                        delta += part.optString("text")
+                    }
+                    if (delta.isNotEmpty()) {
+                        acc.append(delta)
+                        onText(acc.toString())
+                    }
+                }
+            }
+        } catch (e: IOException) {
+            // Dibatalkan dari luar: lempar CancellationException, bukan galat jaringan.
+            currentCoroutineContext().ensureActive()
+            throw AiException(AiErrorKind.Network, e.message)
+        } finally {
+            handle?.dispose()
+        }
+        if (acc.isBlank()) {
+            throw AiException(if (blocked || finish == "SAFETY") AiErrorKind.Blocked else AiErrorKind.Parse)
+        }
+        return acc.toString().trim()
+    }
+
+    private fun httpError(code: Int, msg: String): AiException = when {
+        code == 404 -> AiException(AiErrorKind.ModelNotFound, msg)
+        code == 429 -> AiException(AiErrorKind.Quota, msg)
+        code == 401 || code == 403 -> AiException(AiErrorKind.BadKey, msg)
+        code == 400 && (msg.contains("API key", true) || msg.contains("API_KEY", true)) -> AiException(AiErrorKind.BadKey, msg)
+        code == 400 && msg.contains("not found", true) -> AiException(AiErrorKind.ModelNotFound, msg)
+        else -> AiException(AiErrorKind.Server, msg)
+    }
+
     private fun call(apiKey: String, modelId: String, body: JSONObject): String {
         val req = Request.Builder()
             .url("https://generativelanguage.googleapis.com/v1beta/models/${modelId.trim()}:generateContent")
@@ -201,15 +301,7 @@ class LyricsAnalyzer(cacheDir: File) {
                 val raw = resp.body?.string().orEmpty()
                 if (!resp.isSuccessful) {
                     val msg = runCatching { JSONObject(raw).optJSONObject("error")?.optString("message") }.getOrNull().orEmpty()
-                    throw when {
-                        resp.code == 404 -> AiException(AiErrorKind.ModelNotFound, msg)
-                        resp.code == 429 -> AiException(AiErrorKind.Quota, msg)
-                        resp.code == 401 || resp.code == 403 -> AiException(AiErrorKind.BadKey, msg)
-                        resp.code == 400 && (msg.contains("API key", true) || msg.contains("API_KEY", true)) -> AiException(AiErrorKind.BadKey, msg)
-                        resp.code == 400 && msg.contains("not found", true) -> AiException(AiErrorKind.ModelNotFound, msg)
-                        resp.code >= 500 -> AiException(AiErrorKind.Server, msg)
-                        else -> AiException(AiErrorKind.Server, msg)
-                    }
+                    throw httpError(resp.code, msg)
                 }
                 val json = JSONObject(raw)
                 if (json.optJSONObject("promptFeedback")?.optString("blockReason").orEmpty().isNotEmpty()) {
@@ -242,11 +334,23 @@ class LyricsAnalyzer(cacheDir: File) {
         const val MAX_TURNS = 8
         const val MAX_CHAT_TURNS = 20
         const val SYSTEM_GENERAL =
-            "Kamu Olyuno, asisten AI di aplikasi musik Olyuno. Bantu pengguna soal musik: makna lirik, latar belakang lagu, artis, album, genre, rekomendasi. " +
-                "Jawab natural seperti asisten AI pada umumnya: langsung ke inti, paragraf pendek, boleh memakai daftar dan **huruf tebal**. " +
+            "Kamu Olyuno, asisten AI di aplikasi musik Olyuno. Bantu pengguna soal musik: makna lirik, latar belakang lagu, artis, album, genre, playlist, rekomendasi. " +
+                "Gaya jawaban: langsung ke inti, tanpa basa-basi pembuka (jangan mulai dengan \"Tentu\", \"Baik\", atau mengulang pertanyaan). Kalimat pertama sudah memuat jawaban utamanya. " +
+                "Susun jawaban supaya mudah dipindai di layar HP: paragraf pendek (maksimal 3 kalimat); daftar berpoin (- ) untuk beberapa hal yang setara; " +
+                "daftar bernomor (1. ) untuk urutan, peringkat, atau rekomendasi; **huruf tebal** untuk judul lagu, nama artis, dan istilah kunci. " +
+                "Kalau jawabanmu punya dua bagian atau lebih, beri judul bagian yang pendek dengan ## (tanpa emoji dan tanpa titik dua); jawaban pendek tidak perlu judul. " +
+                "Untuk rekomendasi lagu, pakai daftar bernomor berformat: 1. **Judul** - Artis: alasan singkat satu kalimat. " +
+                "Jangan pakai tabel, garis pemisah, atau emoji berlebihan. Padat lebih baik daripada panjang; panjang jawaban mengikuti kebutuhan pertanyaan. " +
                 "Jangan mengarang fakta (rilis, cerita pembuatan, penghargaan); kalau tidak yakin, katakan. " +
                 "Jangan menyalin lirik utuh, kutipan paling banyak di bawah 15 kata. " +
-                "Kalau pertanyaan di luar musik, jawab singkat lalu arahkan kembali ke musik."
+                "Kalau pertanyaan di luar musik, jawab singkat lalu arahkan kembali ke musik. " +
+                "Kalau jawabanmu membahas hal tertentu (bukan sekadar menyebut sekilas), tutup jawaban dengan blok-blok persis ini di baris paling akhir, tanpa teks apa pun setelahnya. " +
+                "Lagu: [[LAGU]] lalu satu lagu per baris berformat Judul | Artis, lalu [[/LAGU]]. " +
+                "Artis: [[ARTIS]] lalu satu nama artis per baris, lalu [[/ARTIS]]. " +
+                "Album: [[ALBUM]] lalu satu album per baris berformat Judul | Artis, lalu [[/ALBUM]]. " +
+                "Playlist: [[PLAYLIST]] lalu satu playlist per baris berformat Judul | Pembuat, lalu [[/PLAYLIST]] (untuk playlist, tulis judul yang bisa dipakai untuk mencarinya). " +
+                "Tulis hanya blok yang relevan, maksimal 5 item per blok, hanya yang nyata dan kamu yakin ada, urut dari yang paling dibahas. Kalau tidak ada yang dibahas, jangan tulis blok apa pun."
+
         val RETRYABLE = setOf(AiErrorKind.Server, AiErrorKind.Parse)
 
         const val SYSTEM =

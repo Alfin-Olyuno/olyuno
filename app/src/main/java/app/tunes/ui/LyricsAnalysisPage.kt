@@ -2,18 +2,30 @@ package app.tunes.ui
 
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -24,6 +36,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
@@ -50,6 +63,7 @@ import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Menu
 import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material3.AlertDialog
@@ -65,6 +79,9 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.key
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -73,7 +90,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
@@ -83,7 +104,9 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -91,11 +114,24 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import kotlin.math.PI
+import kotlin.math.sin
+import kotlin.math.cos
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.tunes.MainViewModel
 import app.tunes.ai.AiErrorKind
 import app.tunes.data.AiModel
+import app.tunes.innertube.CollectionKind
+import app.tunes.innertube.CollectionRef
+import app.tunes.innertube.SongItem
+import app.tunes.ai.AiRef
+import app.tunes.ai.EntityRef
+import app.tunes.ai.SearchTopic
+import app.tunes.ai.SearchTopics
+import app.tunes.ai.SongRef
+import app.tunes.ai.SongRefs
 import app.tunes.data.BedahEntry
+import app.tunes.data.ShimmerLevel
 import app.tunes.i18n.t
 import app.tunes.player.PlayerState
 
@@ -120,6 +156,10 @@ fun LyricsAnalysisPage(
     val history by vm.bedahHistory.collectAsStateWithLifecycle()
     val model by vm.aiPrefs.model.collectAsStateWithLifecycle()
 
+    // Topik pertanyaan terakhir (lagu / playlist / artis) untuk teks indikator di samping titik menunggu.
+    val lastQuestion = chat.lastOrNull()?.takeIf { it.fromUser }?.text
+    val searchTopics = remember(lastQuestion) { SearchTopics.detect(lastQuestion) }
+
     var showSettings by remember { mutableStateOf(false) }
     var input by rememberSaveable { mutableStateOf("") }
     var drawerOpen by rememberSaveable { mutableStateOf(false) }
@@ -128,10 +168,21 @@ fun LyricsAnalysisPage(
     // Back menutup panel riwayat dulu sebelum keluar halaman.
     androidx.activity.compose.BackHandler(enabled = drawerOpen) { drawerOpen = false }
 
-    // Pesan baru, jawaban dimuat, atau galat: gulir ke bawah.
+    // Pesan baru, titik menunggu muncul, atau galat: gulir ke bawah.
+    // Selama jawaban mengalir dan setelah selesai, tidak ada lompatan ke atas pesan: yang mengikuti ujung teks ada di bawah.
+    var prevBusy by remember { mutableStateOf(false) }
     LaunchedEffect(chat.size, chatBusy, chatError) {
+        val justFinished = prevBusy && !chatBusy
+        prevBusy = chatBusy
+        if (justFinished && chatError == null) return@LaunchedEffect
+        if (chatBusy && chat.lastOrNull()?.fromUser == false) return@LaunchedEffect
         val last = listState.layoutInfo.totalItemsCount - 1
         if (last >= 0) listState.animateScrollToItem(last)
+    }
+    // Jawaban mengalir: ikuti ujung teks selama pengguna tidak sedang menggulir sendiri.
+    val streamLen = chat.lastOrNull()?.takeIf { !it.fromUser }?.text?.length ?: 0
+    LaunchedEffect(streamLen) {
+        if (streamLen > 0 && chatBusy && !listState.isScrollInProgress) listState.scrollBy(100000f)
     }
 
     val send = {
@@ -176,10 +227,25 @@ fun LyricsAnalysisPage(
                     contentPadding = PaddingValues(top = 4.dp, bottom = 16.dp),
                     verticalArrangement = Arrangement.spacedBy(14.dp),
                 ) {
-                    itemsIndexed(chat) { _, m ->
-                        if (m.fromUser) UserMessage(m.text) else AiMessage(m.text)
+                    itemsIndexed(chat) { index, m ->
+                        if (m.fromUser) {
+                            UserMessage(m.text)
+                        } else {
+                            AiMessage(
+                                text = m.text,
+                                streaming = chatBusy && index == chat.lastIndex,
+                                vm = vm,
+                                currentId = player.current?.videoId,
+                                onPlay = { song ->
+                                    // Lagu yang sudah diputar tidak dimulai ulang; langsung buka pemutar.
+                                    if (player.current?.videoId != song.videoId) vm.playSong(song)
+                                    onOpenPlayer()
+                                },
+                                onOpenEntity = { ref -> vm.openCollection(ref) },
+                            )
+                        }
                     }
-                    if (chatBusy) item { TypingIndicator() }
+                    if (chatBusy && chat.lastOrNull()?.fromUser == true) item { TypingIndicator(searchTopics) }
                     chatError?.let { kind ->
                         item {
                             ErrorRow(
@@ -267,87 +333,621 @@ private fun UserMessage(text: String) {
     }
 }
 
-/** Jawaban AI: teks polos selebar halaman (tanpa gelembung / kartu), format markdown ringan. */
+/**
+ * Jawaban AI: teks polos selebar halaman (tanpa gelembung / kartu), format markdown ringan.
+ * Kalau AI membahas lagu (blok [[LAGU]] di akhir jawaban), di atas teks muncul "Ringkasan >" beserta kartu lagunya.
+ */
 @Composable
-private fun AiMessage(text: String) {
-    val rendered = remember(text) { renderMarkdown(text) }
-    SelectionContainer {
-        Text(
-            rendered,
-            style = MaterialTheme.typography.bodyLarge.copy(lineHeight = MaterialTheme.typography.bodyLarge.lineHeight * 1.12f),
-            color = MaterialTheme.colorScheme.onSurface,
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),
-        )
-    }
-}
-
-@Composable
-private fun TypingIndicator() {
-    ProvideShimmer {
-        Column(
-            Modifier.fillMaxWidth().padding(horizontal = 20.dp).semantics { contentDescription = t("Memuat") },
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            ShimmerBox(Modifier.fillMaxWidth(0.85f).height(14.dp))
-            ShimmerBox(Modifier.fillMaxWidth(0.95f).height(14.dp))
-            ShimmerBox(Modifier.fillMaxWidth(0.5f).height(14.dp))
-        }
-    }
-}
-
-@Composable
-private fun ErrorRow(kind: AiErrorKind, onRetry: () -> Unit, onSetKey: () -> Unit, onSettings: () -> Unit) {
-    Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
-        Text(
-            aiErrorText(kind),
-            color = MaterialTheme.colorScheme.error,
-            style = MaterialTheme.typography.bodyMedium,
-            modifier = Modifier.padding(horizontal = 8.dp),
-        )
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            when (kind) {
-                AiErrorKind.NoKey -> Button(onClick = onSetKey, modifier = Modifier.padding(start = 8.dp)) { Text(t("Atur kunci API")) }
-                AiErrorKind.BadKey -> {
-                    TextButton(onClick = onSetKey) { Text(t("Atur kunci API")) }
-                    RetryTextButton(onClick = onRetry)
-                }
-                AiErrorKind.ModelNotFound -> {
-                    TextButton(onClick = onSettings) { Text(t("Pengaturan Tanya AI")) }
-                    RetryTextButton(onClick = onRetry)
-                }
-                else -> RetryTextButton(onClick = onRetry)
+private fun AiMessage(
+    text: String,
+    streaming: Boolean,
+    vm: MainViewModel,
+    currentId: String?,
+    onPlay: (SongItem) -> Unit,
+    onOpenEntity: (CollectionRef) -> Unit,
+) {
+    val parsed = remember(text, streaming) { SongRefs.parse(text, complete = !streaming) }
+    val songStates by vm.aiSongs.collectAsStateWithLifecycle()
+    val entityStates by vm.aiEntities.collectAsStateWithLifecycle()
+    // Cari lagu / artis / album / playlist-nya begitu daftarnya utuh (blok sudah ditutup atau jawaban selesai).
+    LaunchedEffect(parsed.items) {
+        parsed.items.forEach { r ->
+            when (r) {
+                is AiRef.Song -> vm.resolveAiSong(r.ref)
+                is AiRef.Entity -> vm.resolveAiEntity(r.ref)
             }
         }
+    }
+    Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp)) {
+        if (parsed.items.isNotEmpty()) {
+            SongSummary(parsed.items, songStates, entityStates, currentId, onPlay, onOpenEntity)
+            Spacer(Modifier.height(12.dp))
+        }
+        if (parsed.text.isNotBlank()) AiMarkdown(parsed.text, streaming)
+    }
+}
+
+private val CARD_HEIGHT = 64.dp
+private val DECK_PEEK = 10.dp
+
+private fun topicOf(kind: CollectionKind): SearchTopic = when (kind) {
+    CollectionKind.ARTIST -> SearchTopic.Artist
+    CollectionKind.ALBUM -> SearchTopic.Album
+    CollectionKind.PLAYLIST -> SearchTopic.Playlist
+    else -> SearchTopic.Song
+}
+
+private fun kindLabel(kind: CollectionKind): String = when (kind) {
+    CollectionKind.ARTIST -> t("Artis")
+    CollectionKind.ALBUM -> t("Album")
+    else -> t("Playlist")
+}
+
+/**
+ * "Ringkasan >" + kartu lagu / artis / album / playlist yang dibahas AI (urut seperti ditulis AI). Satu item: satu kartu.
+ * Beberapa item: awalnya kartu bertumpuk (yang depan terlihat penuh, yang di belakang mengintip); diketuk (atau ketuk
+ * "Ringkasan") membentang jadi daftar. Ketuk kartu lagu = putar dan buka pemutar; ketuk kartu artis / album / playlist = buka halamannya.
+ */
+@Composable
+private fun SongSummary(
+    refs: List<AiRef>,
+    songStates: Map<String, MainViewModel.AiSongState>,
+    entityStates: Map<String, MainViewModel.AiEntityState>,
+    currentId: String?,
+    onPlay: (SongItem) -> Unit,
+    onOpenEntity: (CollectionRef) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val smooth = LocalSmoothAnim.current
+    val multi = refs.size > 1
+    val onlySongs = refs.all { it is AiRef.Song }
+    val rotation by animateFloatAsState(
+        targetValue = if (expanded) 90f else 0f,
+        animationSpec = if (smooth) tween<Float>(180) else snap<Float>(),
+        label = "summaryChevron",
+    )
+    val sizeAnim = if (smooth) Modifier.animateContentSize(tween(220)) else Modifier
+    // Jenis yang kartunya masih dicari di YouTube Music; teksnya berganti kalau lebih dari satu jenis.
+    val loadingTopics = refs.mapNotNull { r ->
+        when (r) {
+            is AiRef.Song -> {
+                val st = songStates[r.ref.key]
+                if (st == null || st is MainViewModel.AiSongState.Loading) SearchTopic.Song else null
+            }
+            is AiRef.Entity -> {
+                val st = entityStates[r.ref.key]
+                if (st == null || st is MainViewModel.AiEntityState.Loading) topicOf(r.ref.kind) else null
+            }
+        }
+    }.distinct()
+    Column(Modifier.fillMaxWidth().then(sizeAnim)) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .then(if (multi) Modifier.clickable { expanded = !expanded } else Modifier)
+                .padding(vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(t("Ringkasan"), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+            if (multi) {
+                Icon(
+                    Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp).graphicsLayer { rotationZ = rotation },
+                )
+            }
+            if (loadingTopics.isNotEmpty()) {
+                Spacer(Modifier.width(10.dp))
+                key(loadingTopics) { SearchingLabel(loadingTopics, MaterialTheme.typography.labelMedium) }
+            }
+            if (multi) {
+                Spacer(Modifier.weight(1f))
+                Text(
+                    if (onlySongs) t("%d lagu", refs.size) else t("%d hasil", refs.size),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+        if (!multi || expanded) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                refs.forEach { r ->
+                    RefCard(r, songStates, entityStates, currentId, Modifier.fillMaxWidth(), true, onPlay, onOpenEntity)
+                }
+            }
+        } else {
+            val shown = refs.take(3)
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(CARD_HEIGHT + DECK_PEEK * (shown.size - 1))
+                    .clickable { expanded = true },
+            ) {
+                // Dari yang paling belakang ke depan, supaya kartu depan menutupi yang di belakangnya.
+                for (i in shown.indices.reversed()) {
+                    RefCard(
+                        r = shown[i],
+                        songStates = songStates,
+                        entityStates = entityStates,
+                        currentId = currentId,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .offset(y = DECK_PEEK * i)
+                            .graphicsLayer {
+                                val sc = 1f - 0.04f * i
+                                scaleX = sc
+                                scaleY = sc
+                                transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0.5f, 0f)
+                            },
+                        interactive = false,
+                        onPlay = onPlay,
+                        onOpenEntity = onOpenEntity,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** Memilih kartu yang pas. [interactive] false = kartu hanya hiasan (bagian dari tumpukan). */
+@Composable
+private fun RefCard(
+    r: AiRef,
+    songStates: Map<String, MainViewModel.AiSongState>,
+    entityStates: Map<String, MainViewModel.AiEntityState>,
+    currentId: String?,
+    modifier: Modifier,
+    interactive: Boolean,
+    onPlay: (SongItem) -> Unit,
+    onOpenEntity: (CollectionRef) -> Unit,
+) {
+    when (r) {
+        is AiRef.Song -> {
+            val st = songStates[r.ref.key]
+            val song = (st as? MainViewModel.AiSongState.Found)?.song
+            SongCard(r.ref, st, currentId, modifier, song?.takeIf { interactive }?.let { s -> { onPlay(s) } })
+        }
+        is AiRef.Entity -> {
+            val st = entityStates[r.ref.key]
+            val found = (st as? MainViewModel.AiEntityState.Found)?.ref
+            EntityCard(r.ref, st, modifier, found?.takeIf { interactive }?.let { f -> { onOpenEntity(f) } })
+        }
+    }
+}
+
+/** Satu kartu lagu: sampul, judul, artis, ikon putar. [onClick] null = kartu hanya hiasan (bagian dari tumpukan). */
+@Composable
+private fun SongCard(
+    ref: SongRef,
+    state: MainViewModel.AiSongState?,
+    currentId: String?,
+    modifier: Modifier,
+    onClick: (() -> Unit)?,
+) {
+    val song = (state as? MainViewModel.AiSongState.Found)?.song
+    val shape = RoundedCornerShape(18.dp)
+    val missing = state is MainViewModel.AiSongState.Missing
+    Row(
+        modifier
+            .height(CARD_HEIGHT)
+            .clip(shape)
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, shape)
+            .then(if (onClick != null && song != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .padding(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (song != null) {
+            Artwork(song.thumbnail, Modifier.size(48.dp), RoundedCornerShape(12.dp))
+        } else {
+            Box(Modifier.size(48.dp).clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surfaceVariant))
+        }
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                song?.title ?: ref.title,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                color = if (missing) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+                song?.artist ?: ref.artist,
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (song != null) {
+            Icon(
+                Icons.Rounded.PlayArrow,
+                contentDescription = t("Putar"),
+                tint = if (song.videoId == currentId) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(end = 6.dp).size(24.dp),
+            )
+        }
+    }
+}
+
+/**
+ * Kartu artis (sampul bulat), album, atau playlist. Setelah ketemu di YouTube Music, yang tampil adalah judul aslinya;
+ * ketuk = buka halaman aslinya. [onClick] null = hiasan, atau belum / tidak ketemu.
+ */
+@Composable
+private fun EntityCard(
+    ref: EntityRef,
+    state: MainViewModel.AiEntityState?,
+    modifier: Modifier,
+    onClick: (() -> Unit)?,
+) {
+    val found = (state as? MainViewModel.AiEntityState.Found)?.ref
+    val missing = state is MainViewModel.AiEntityState.Missing
+    val shape = RoundedCornerShape(18.dp)
+    val thumbShape = if (ref.kind == CollectionKind.ARTIST) CircleShape else RoundedCornerShape(12.dp)
+    val subtitle = found?.subtitle
+        ?: listOfNotNull(kindLabel(ref.kind), ref.by.takeIf { it.isNotBlank() }).joinToString(" · ")
+    Row(
+        modifier
+            .height(CARD_HEIGHT)
+            .clip(shape)
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, shape)
+            .then(if (onClick != null && found != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .padding(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (found != null) {
+            Artwork(found.thumbnail, Modifier.size(48.dp), thumbShape)
+        } else {
+            Box(Modifier.size(48.dp).clip(thumbShape).background(MaterialTheme.colorScheme.surfaceVariant))
+        }
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                found?.title ?: ref.title,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                color = if (missing) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+                subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (found != null) {
+            Icon(
+                Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+                contentDescription = t("Buka"),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(end = 2.dp).size(24.dp),
+            )
+        }
+    }
+}
+
+/** Satu siklus penuh tiap gaya = 2400 ms; semua periode gaya membagi 2400, jadi putarannya tersambung mulus. */
+private const val DOT_SEGMENT_MS = 2400f
+private const val DOT_PATTERNS = 5
+/** Lama peralihan halus antar gaya (di ujung tiap gaya). */
+private const val DOT_BLEND_MS = 450f
+
+/** Tampilan satu titik: [alpha], [scale], dan [lift] (dp, positif = naik). */
+private class DotLook(val alpha: Float, val scale: Float, val lift: Float)
+
+private fun smooth01(x: Float): Float {
+    val c = x.coerceIn(0f, 1f)
+    return c * c * (3f - 2f * c)
+}
+
+/** Denyut halus 0..1..0 per siklus (x = fase, boleh negatif / lebih dari 1). */
+private fun wave01(x: Float): Float = 0.5f - 0.5f * cos(2f * PI.toFloat() * x)
+
+private fun mix(a: Float, b: Float, w: Float): Float = a + (b - a) * w
+
+/** Gerak titik ke-[i] (0..2) untuk gaya ke-[pattern] pada waktu [ms]. */
+private fun dotLook(pattern: Int, ms: Float, i: Int): DotLook = when (pattern) {
+    // 0 Gelombang: titik naik-turun bergantian dari kiri ke kanan.
+    0 -> {
+        val p = wave01(ms / 800f - i * 0.17f)
+        DotLook(0.35f + 0.65f * p, 0.65f + 0.35f * p, 3.5f * p)
+    }
+    // 1 Mengetik: titik muncul satu per satu, lalu semuanya meredup bersama.
+    1 -> {
+        val x = (ms % 1200f) / 1200f
+        val a = smooth01((x - i * 0.2f) / 0.14f) * (1f - smooth01((x - 0.84f) / 0.14f))
+        DotLook(0.18f + 0.82f * a, 0.6f + 0.4f * a, 0f)
+    }
+    // 2 Sorot: terang berpindah dari satu titik ke titik berikutnya.
+    2 -> {
+        val w = wave01(ms / 1200f - i / 3f)
+        val p = w * w * w
+        DotLook(0.25f + 0.75f * p, 0.55f + 0.6f * p, 0f)
+    }
+    // 3 Napas: ketiganya membesar dan terang hampir serempak.
+    3 -> {
+        val p = wave01(ms / 1200f - i * 0.04f)
+        DotLook(0.3f + 0.7f * p, 0.7f + 0.5f * p, 0f)
+    }
+    // 4 Ayun: naik-turun mengalir seperti gelombang sinus, kecerahan tetap.
+    else -> {
+        val sn = sin(2f * PI.toFloat() * (ms / 1200f - i * 0.22f))
+        DotLook(0.85f, 1f, 2.5f * sn)
+    }
+}
+
+/** Gaya aktif, dicampur halus ke gaya berikutnya di ujung segmennya supaya tidak ada lompatan. */
+private fun blendedLook(ms: Float, i: Int): DotLook {
+    val seg = (ms / DOT_SEGMENT_MS).toInt().coerceIn(0, DOT_PATTERNS - 1)
+    val toEnd = (seg + 1) * DOT_SEGMENT_MS - ms
+    val cur = dotLook(seg, ms, i)
+    if (toEnd > DOT_BLEND_MS) return cur
+    val nxt = dotLook((seg + 1) % DOT_PATTERNS, ms, i)
+    val w = smooth01(1f - toEnd / DOT_BLEND_MS)
+    return DotLook(mix(cur.alpha, nxt.alpha, w), mix(cur.scale, nxt.scale, w), mix(cur.lift, nxt.lift, w))
+}
+
+/**
+ * Titik menunggu jawaban: tiga titik kecil berwarna aksen yang berganti-ganti gaya geraknya (gelombang, mengetik, sorot,
+ * napas, ayun), berpindah antar gaya dengan mulus. Tampil sampai potongan pertama jawaban tiba.
+ */
+@Composable
+private fun TypingIndicator(topics: List<SearchTopic> = emptyList()) {
+    val transition = rememberInfiniteTransition(label = "typingDots")
+    val total = DOT_SEGMENT_MS * DOT_PATTERNS
+    val clock = transition.animateFloat(
+        initialValue = 0f,
+        targetValue = total,
+        animationSpec = infiniteRepeatable(tween(total.toInt(), easing = LinearEasing)),
+        label = "dotClock",
+    )
+    // Warna aksen tema yang sedang dipakai (ikut mode terang / gelap dan warna sistem), jadi selalu serasi dengan aplikasi.
+    val color = MaterialTheme.colorScheme.primary
+    Row(
+        Modifier
+            .padding(horizontal = 20.dp, vertical = 12.dp)
+            .semantics { contentDescription = t("Memuat") },
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        for (i in 0 until 3) {
+            Box(
+                Modifier
+                    .size(6.dp)
+                    // Waktu dibaca di dalam blok gambar: hanya menggambar ulang, tanpa menyusun ulang tiap frame.
+                    .graphicsLayer {
+                        val look = blendedLook(clock.value, i)
+                        scaleX = look.scale
+                        scaleY = look.scale
+                        alpha = look.alpha
+                        translationY = -look.lift * density
+                    }
+                    .background(color, CircleShape),
+            )
+        }
+        if (topics.isNotEmpty()) {
+            Spacer(Modifier.width(2.dp))
+            SearchingLabel(topics)
+        }
+    }
+}
+
+/** Satu sapuan kilau (kiri ke kanan) = 1600 ms. */
+private const val SWEEP_MS = 1600
+
+private fun searchLabel(topic: SearchTopic): String = when (topic) {
+    SearchTopic.Song -> t("Mencari lagu")
+    SearchTopic.Playlist -> t("Mencari playlist")
+    SearchTopic.Artist -> t("Mencari artis")
+    SearchTopic.Album -> t("Mencari album")
+}
+
+/**
+ * Teks yang kilaunya menyapu dari kiri teks sampai kanan, lalu mengulang. Huruf digambar dulu, lalu gradien
+ * (redup, terang, redup) menimpanya hanya di bagian huruf (BlendMode.SrcIn), jadi yang bergerak cuma warnanya.
+ * [progress] dibaca saat menggambar, bukan saat menyusun, jadi tidak ada recompose tiap frame.
+ */
+@Composable
+private fun ShimmerText(
+    text: String,
+    progress: () -> Float,
+    style: TextStyle = MaterialTheme.typography.bodyMedium,
+) {
+    val scheme = MaterialTheme.colorScheme
+    val level = LocalShimmerLevel.current
+    if (level == ShimmerLevel.Off) {
+        Text(text, style = style, color = scheme.onSurfaceVariant, maxLines = 1, softWrap = false)
+        return
+    }
+    val base = scheme.onSurfaceVariant.copy(alpha = if (level == ShimmerLevel.Strong) 0.5f else 0.62f)
+    val highlight = scheme.onSurface
+    Text(
+        text,
+        style = style,
+        // Hanya bentuk hurufnya yang dipakai; warna akhirnya berasal dari gradien di bawah.
+        color = Color.Black,
+        maxLines = 1,
+        softWrap = false,
+        modifier = Modifier
+            .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+            .drawWithContent {
+                drawContent()
+                val band = (size.width * 0.6f).coerceAtLeast(40f)
+                val x = -band + progress() * (size.width + band)
+                drawRect(
+                    brush = Brush.horizontalGradient(colors = listOf(base, highlight, base), startX = x, endX = x + band),
+                    blendMode = BlendMode.SrcIn,
+                )
+            },
+    )
+}
+
+/**
+ * Indikator di kanan titik menunggu: "Mencari lagu" / "Mencari playlist" / "Mencari artis" dengan kilau yang
+ * menyapu kiri ke kanan. Kalau pertanyaannya menyentuh lebih dari satu hal, teksnya berganti tiap satu sapuan.
+ */
+@Composable
+private fun SearchingLabel(topics: List<SearchTopic>, style: TextStyle = MaterialTheme.typography.bodyMedium) {
+    val smooth = LocalSmoothAnim.current
+    val n = topics.size
+    val clock = rememberInfiniteTransition(label = "searchLabel").animateFloat(
+        initialValue = 0f,
+        targetValue = (SWEEP_MS * n).toFloat(),
+        animationSpec = infiniteRepeatable(tween(SWEEP_MS * n, easing = LinearEasing)),
+        label = "searchClock",
+    )
+    val index by remember(n) { derivedStateOf { (clock.value / SWEEP_MS).toInt().coerceIn(0, n - 1) } }
+    AnimatedContent(
+        targetState = topics[index.coerceIn(0, n - 1)],
+        transitionSpec = {
+            if (smooth) {
+                (fadeIn(tween(220)) + slideInVertically(tween(220)) { it / 2 }) togetherWith
+                    (fadeOut(tween(140)) + slideOutVertically(tween(140)) { -it / 2 })
+            } else {
+                EnterTransition.None togetherWith ExitTransition.None
+            }
+        },
+        label = "searchLabelSwap",
+    ) { topic ->
+        ShimmerText(searchLabel(topic), progress = { (clock.value % SWEEP_MS) / SWEEP_MS }, style = style)
     }
 }
 
 // ---------------------------------------------------------------- markdown
 
 private val HEADING = Regex("^#{1,6}\\s+(.*)")
-private val BULLET = Regex("^\\s*[-*•]\\s+(.*)")
+private val BULLET = Regex("^(\\s*)[-*•]\\s+(.*)")
+private val NUMBERED = Regex("^(\\s*)(\\d{1,3})[.)]\\s+(.*)")
+private val RULE = Regex("^(-{3,}|\\*{3,}|_{3,})$")
+private val TABLE_SEP = Regex("^:?-{2,}:?$")
+private val BULLET_GLYPHS = listOf("•", "◦", "▪")
 
-/** Markdown ringan: **tebal**, `kode`, judul (#) jadi tebal, daftar (- / *) jadi poin. Selebihnya teks apa adanya. */
-private fun renderMarkdown(src: String): AnnotatedString = buildAnnotatedString {
-    val lines = src.trim().lines()
-    lines.forEachIndexed { i, raw ->
-        val line = raw.trimEnd()
-        val heading = HEADING.matchEntire(line)
-        val bullet = BULLET.matchEntire(line)
-        when {
-            heading != null -> withStyle(SpanStyle(fontWeight = FontWeight.SemiBold)) { appendInline(heading.groupValues[1]) }
-            bullet != null -> {
-                append("•  ")
-                appendInline(bullet.groupValues[1])
-            }
-            else -> appendInline(line)
-        }
-        if (i < lines.lastIndex) append('\n')
-    }
+/** Blok hasil penguraian jawaban AI. */
+private sealed interface MdBlock {
+    data class Heading(val level: Int, val text: String) : MdBlock
+    data class Para(val text: String) : MdBlock
+    data class Bullet(val level: Int, val text: String) : MdBlock
+    data class Numbered(val number: String, val level: Int, val text: String) : MdBlock
+    data class Quote(val text: String) : MdBlock
+    data class Code(val text: String) : MdBlock
+    data class Table(val rows: List<List<String>>) : MdBlock
+    data object Rule : MdBlock
 }
 
-private fun AnnotatedString.Builder.appendInline(s: String) {
+private fun indentLevel(ws: String): Int = if (ws.isEmpty()) 0 else if (ws.length < 6) 1 else 2
+
+/**
+ * Uraikan markdown ringan jadi blok: judul (#), paragraf, daftar berpoin / bernomor (dengan tingkat), kutipan (>),
+ * blok kode (```), garis (---), dan tabel (|). Aman untuk teks yang masih mengalir (blok kode / tabel yang belum selesai).
+ */
+private fun parseBlocks(src: String): List<MdBlock> {
+    val out = ArrayList<MdBlock>()
+    val lines = src.trim().lines()
+    val para = StringBuilder()
+    fun flushPara() {
+        if (para.isNotEmpty()) {
+            out += MdBlock.Para(para.toString())
+            para.setLength(0)
+        }
+    }
+    var i = 0
+    while (i < lines.size) {
+        val raw = lines[i].trimEnd()
+        val t = raw.trim()
+        val heading = HEADING.matchEntire(t)
+        val bullet = BULLET.matchEntire(raw)
+        val numbered = NUMBERED.matchEntire(raw)
+        when {
+            t.isEmpty() -> {
+                flushPara()
+                i++
+            }
+            t.startsWith("```") -> {
+                flushPara()
+                val code = ArrayList<String>()
+                i++
+                while (i < lines.size && !lines[i].trim().startsWith("```")) {
+                    code += lines[i].trimEnd()
+                    i++
+                }
+                i++ // lewati pagar penutup (atau lewat ujung teks kalau masih mengalir)
+                out += MdBlock.Code(code.joinToString("\n"))
+            }
+            RULE.matches(t) -> {
+                flushPara()
+                out += MdBlock.Rule
+                i++
+            }
+            heading != null -> {
+                flushPara()
+                out += MdBlock.Heading(t.takeWhile { it == '#' }.length, heading.groupValues[1].trim())
+                i++
+            }
+            t.startsWith("|") -> {
+                flushPara()
+                val rows = ArrayList<List<String>>()
+                while (i < lines.size && lines[i].trim().startsWith("|")) {
+                    val cells = lines[i].trim().trim('|').split('|').map { it.trim() }
+                    if (!cells.all { TABLE_SEP.matches(it) }) rows += cells
+                    i++
+                }
+                if (rows.isNotEmpty()) out += MdBlock.Table(rows)
+            }
+            t.startsWith(">") -> {
+                flushPara()
+                val q = StringBuilder()
+                while (i < lines.size && lines[i].trim().startsWith(">")) {
+                    if (q.isNotEmpty()) q.append('\n')
+                    q.append(lines[i].trim().removePrefix(">").trim())
+                    i++
+                }
+                out += MdBlock.Quote(q.toString())
+            }
+            bullet != null -> {
+                flushPara()
+                out += MdBlock.Bullet(indentLevel(bullet.groupValues[1]), bullet.groupValues[2].trim())
+                i++
+            }
+            numbered != null -> {
+                flushPara()
+                out += MdBlock.Numbered(numbered.groupValues[2], indentLevel(numbered.groupValues[1]), numbered.groupValues[3].trim())
+                i++
+            }
+            else -> {
+                if (para.isNotEmpty()) para.append('\n')
+                para.append(t)
+                i++
+            }
+        }
+    }
+    flushPara()
+    return out
+}
+
+/**
+ * Teks inline: ***tebal miring***, **tebal**, *miring*, `kode`, dan [label](url) (hanya label yang ditampilkan).
+ * [streaming] = teks masih mengalir: penanda yang belum ditutup (** atau `) dianggap membuka gaya sampai ujung teks,
+ * jadi tanda bintangnya tidak sempat tampil mentah lalu tiba-tiba berubah.
+ */
+private fun buildInline(s: String, codeBg: Color, streaming: Boolean): AnnotatedString = buildAnnotatedString {
     var i = 0
     while (i < s.length) {
+        if (s.startsWith("***", i)) {
+            val end = s.indexOf("***", i + 3)
+            if (end > i + 3) {
+                withStyle(SpanStyle(fontWeight = FontWeight.SemiBold, fontStyle = FontStyle.Italic)) { append(s.substring(i + 3, end)) }
+                i = end + 3
+                continue
+            }
+        }
         if (s.startsWith("**", i)) {
             val end = s.indexOf("**", i + 2)
             if (end > i + 2) {
@@ -355,17 +955,157 @@ private fun AnnotatedString.Builder.appendInline(s: String) {
                 i = end + 2
                 continue
             }
+            if (end < 0 && streaming && i + 2 < s.length) {
+                withStyle(SpanStyle(fontWeight = FontWeight.SemiBold)) { append(s.substring(i + 2)) }
+                i = s.length
+                continue
+            }
+        }
+        if (s[i] == '*' && i + 1 < s.length && !s[i + 1].isWhitespace() && s[i + 1] != '*') {
+            val end = s.indexOf('*', i + 1)
+            if (end > i + 1 && !s[end - 1].isWhitespace()) {
+                withStyle(SpanStyle(fontStyle = FontStyle.Italic)) { append(s.substring(i + 1, end)) }
+                i = end + 1
+                continue
+            }
         }
         if (s[i] == '`') {
             val end = s.indexOf('`', i + 1)
             if (end > i + 1) {
-                withStyle(SpanStyle(fontFamily = FontFamily.Monospace)) { append(s.substring(i + 1, end)) }
+                withStyle(SpanStyle(fontFamily = FontFamily.Monospace, background = codeBg)) { append(s.substring(i + 1, end)) }
                 i = end + 1
+                continue
+            }
+            if (end < 0 && streaming && i + 1 < s.length) {
+                withStyle(SpanStyle(fontFamily = FontFamily.Monospace, background = codeBg)) { append(s.substring(i + 1)) }
+                i = s.length
+                continue
+            }
+        }
+        if (s[i] == '[') {
+            val mid = s.indexOf("](", i + 1)
+            val endParen = if (mid > 0) s.indexOf(')', mid + 2) else -1
+            if (mid > i + 1 && endParen > mid) {
+                append(s.substring(i + 1, mid))
+                i = endParen + 1
                 continue
             }
         }
         append(s[i])
         i++
+    }
+}
+
+@Composable
+private fun rememberInline(text: String, streaming: Boolean): AnnotatedString {
+    val codeBg = MaterialTheme.colorScheme.surfaceContainerHighest
+    return remember(text, streaming, codeBg) { buildInline(text, codeBg, streaming) }
+}
+
+/**
+ * Jawaban AI yang tertata: judul, paragraf pendek, daftar dengan indentasi menggantung, kutipan, kode, dan tabel,
+ * dengan jarak antarblok yang konsisten. Satu SelectionContainer untuk semuanya, jadi teks bisa diblok lintas blok.
+ */
+@Composable
+private fun AiMarkdown(text: String, streaming: Boolean) {
+    val blocks = remember(text) { parseBlocks(text) }
+    val scheme = MaterialTheme.colorScheme
+    val body = MaterialTheme.typography.bodyLarge.let { it.copy(lineHeight = it.lineHeight * 1.12f) }
+    SelectionContainer {
+        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            blocks.forEachIndexed { idx, b ->
+                // Hanya blok terakhir yang mungkin masih "setengah jadi" saat teks mengalir.
+                val live = streaming && idx == blocks.lastIndex
+                when (b) {
+                    is MdBlock.Heading -> Text(
+                        rememberInline(b.text, live),
+                        style = (if (b.level <= 2) MaterialTheme.typography.titleMedium else MaterialTheme.typography.titleSmall)
+                            .copy(fontWeight = FontWeight.SemiBold),
+                        color = scheme.onSurface,
+                        modifier = Modifier.padding(top = if (idx == 0) 0.dp else 6.dp),
+                    )
+                    is MdBlock.Para -> Text(rememberInline(b.text, live), style = body, color = scheme.onSurface)
+                    is MdBlock.Bullet -> Row(Modifier.fillMaxWidth().padding(start = 4.dp + 18.dp * b.level)) {
+                        Text(
+                            BULLET_GLYPHS[b.level.coerceIn(0, 2)],
+                            style = body,
+                            color = scheme.onSurfaceVariant,
+                            modifier = Modifier.width(18.dp),
+                        )
+                        Text(rememberInline(b.text, live), style = body, color = scheme.onSurface, modifier = Modifier.weight(1f))
+                    }
+                    is MdBlock.Numbered -> Row(Modifier.fillMaxWidth().padding(start = 4.dp + 18.dp * b.level)) {
+                        Text(
+                            b.number + ".",
+                            style = body.copy(fontWeight = FontWeight.SemiBold),
+                            color = scheme.primary,
+                            modifier = Modifier.width(28.dp),
+                        )
+                        Text(rememberInline(b.text, live), style = body, color = scheme.onSurface, modifier = Modifier.weight(1f))
+                    }
+                    is MdBlock.Quote -> Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min)) {
+                        Box(
+                            Modifier
+                                .width(3.dp)
+                                .fillMaxHeight()
+                                .clip(RoundedCornerShape(2.dp))
+                                .background(scheme.primary.copy(alpha = 0.45f)),
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        Text(
+                            rememberInline(b.text, live),
+                            style = body.copy(fontStyle = FontStyle.Italic),
+                            color = scheme.onSurfaceVariant,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                    is MdBlock.Code -> Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(scheme.surfaceContainerHigh)
+                            .horizontalScroll(rememberScrollState())
+                            .padding(12.dp),
+                    ) {
+                        Text(
+                            b.text,
+                            style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
+                            color = scheme.onSurface,
+                            softWrap = false,
+                        )
+                    }
+                    is MdBlock.Table -> Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .border(1.dp, scheme.outlineVariant, RoundedCornerShape(12.dp)),
+                    ) {
+                        b.rows.forEachIndexed { r, cells ->
+                            if (r > 0) HorizontalDivider(color = scheme.outlineVariant)
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .background(if (r == 0) scheme.surfaceContainerHigh else Color.Transparent)
+                                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            ) {
+                                cells.forEach { c ->
+                                    Text(
+                                        rememberInline(c, false),
+                                        style = MaterialTheme.typography.bodyMedium.copy(
+                                            fontWeight = if (r == 0) FontWeight.SemiBold else FontWeight.Normal,
+                                        ),
+                                        color = scheme.onSurface,
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    MdBlock.Rule -> HorizontalDivider(color = scheme.outlineVariant, modifier = Modifier.padding(vertical = 4.dp))
+                }
+            }
+        }
     }
 }
 
@@ -653,15 +1393,6 @@ private fun ModelDropdown(selected: AiModel, onSelect: (AiModel) -> Unit, onSett
                     },
                 )
             }
-            Box(Modifier.fillMaxWidth().height(1.dp).background(MaterialTheme.colorScheme.outlineVariant))
-            DropdownMenuItem(
-                text = { Text(t("Pengaturan Tanya AI")) },
-                leadingIcon = { Icon(Icons.Rounded.Settings, contentDescription = null, modifier = Modifier.size(20.dp)) },
-                onClick = {
-                    open = false
-                    onSettings()
-                },
-            )
         }
     }
 }

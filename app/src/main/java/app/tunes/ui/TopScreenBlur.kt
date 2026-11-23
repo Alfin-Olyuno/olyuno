@@ -50,7 +50,7 @@ import kotlin.math.sin
  */
 
 /** Saklar blur atas-layar. false = hanya pemucat warna latar. */
-private const val TOP_BLUR_ENABLED = true
+private const val TOP_BLUR_ENABLED = false
 
 /** Jangkauan blur (jari-jari sebaran salinan) di bagian paling atas pita. */
 private val TOP_BLUR_RADIUS = 9.dp
@@ -164,6 +164,7 @@ fun Modifier.topBlurSource(solid: Dp, fade: Dp = TOP_FADE): Modifier {
 /** Pemucat atas-layar setinggi status bar + pudar. [barBelow] = tinggi tambahan yang ikut ditutup penuh di bawah status bar. */
 @Composable
 fun TopScreenBlur(modifier: Modifier = Modifier, barBelow: Dp = 0.dp) {
+    if (!TOP_BLUR_ENABLED) return // blur / pemucat atas-layar dimatikan
     val solid = (statusBarHeight() + barBelow - 2.dp).coerceAtLeast(0.dp)
     TopWash(solid = solid, height = solid + TOP_FADE, modifier = modifier)
 }
@@ -171,6 +172,7 @@ fun TopScreenBlur(modifier: Modifier = Modifier, barBelow: Dp = 0.dp) {
 /** Varian untuk halaman dengan bar judul yang tinggi totalnya sudah diketahui ([barHeight] termasuk status bar). */
 @Composable
 fun TopScreenBlurForBar(barHeight: Dp, modifier: Modifier = Modifier) {
+    if (!TOP_BLUR_ENABLED) return // blur / pemucat atas-layar dimatikan
     val solid = (barHeight - 10.dp).coerceAtLeast(0.dp)
     TopWash(solid = solid, height = solid + TOP_FADE + 10.dp, modifier = modifier)
 }

@@ -62,6 +62,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import app.tunes.i18n.t
@@ -318,6 +319,76 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Riwayat percakapan Tanya AI (terbaru di atas). */
     val bedahHistory: StateFlow<List<app.tunes.data.BedahEntry>> get() = container.bedahHistory.entries
 
+    /** Hasil pencarian lagu yang disebut AI di jawabannya (kunci = [app.tunes.ai.SongRef.key]). */
+    sealed interface AiSongState {
+        data object Loading : AiSongState
+        data class Found(val song: SongItem) : AiSongState
+        data object Missing : AiSongState
+    }
+
+    private val _aiSongs = MutableStateFlow<Map<String, AiSongState>>(emptyMap())
+    val aiSongs: StateFlow<Map<String, AiSongState>> = _aiSongs.asStateFlow()
+
+    /** Cari lagu yang disebut AI di YouTube Music. Aman dipanggil berulang: yang sudah ketemu / sedang dicari dilewati. */
+    fun resolveAiSong(ref: app.tunes.ai.SongRef) {
+        val key = ref.key
+        val cur = _aiSongs.value[key]
+        if (cur is AiSongState.Found || cur is AiSongState.Loading) return
+        _aiSongs.update { it + (key to AiSongState.Loading) }
+        viewModelScope.launch {
+            val state: AiSongState = try {
+                val results = innerTube.search(ref.title + " " + ref.artist)
+                val t = ref.title.trim().lowercase()
+                val best = results.firstOrNull { it.title.lowercase().contains(t) } ?: results.firstOrNull()
+                if (best != null) AiSongState.Found(best) else AiSongState.Missing
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                AiSongState.Missing
+            }
+            _aiSongs.update { it + (key to state) }
+        }
+    }
+
+    /** Hasil pencarian artis / album / playlist yang disebut AI (kunci = [app.tunes.ai.EntityRef.key]). */
+    sealed interface AiEntityState {
+        data object Loading : AiEntityState
+        data class Found(val ref: CollectionRef) : AiEntityState
+        data object Missing : AiEntityState
+    }
+
+    private val _aiEntities = MutableStateFlow<Map<String, AiEntityState>>(emptyMap())
+    val aiEntities: StateFlow<Map<String, AiEntityState>> = _aiEntities.asStateFlow()
+
+    /**
+     * Cari artis / album / playlist yang disebut AI di YouTube Music supaya kartunya bisa dibuka ke halaman aslinya.
+     * Artis dan playlist boleh jatuh ke hasil pertama sejenis; album harus mirip judulnya (album salah lebih buruk daripada kosong).
+     */
+    fun resolveAiEntity(ref: app.tunes.ai.EntityRef) {
+        val key = ref.key
+        val cur = _aiEntities.value[key]
+        if (cur is AiEntityState.Found || cur is AiEntityState.Loading) return
+        _aiEntities.update { it + (key to AiEntityState.Loading) }
+        viewModelScope.launch {
+            val state: AiEntityState = try {
+                val q = if (ref.kind == CollectionKind.ARTIST) ref.title else (ref.title + " " + ref.by).trim()
+                val res = innerTube.searchAll(q)
+                val pool = (res.top.filterIsInstance<app.tunes.innertube.SearchHit.Entity>().map { it.ref } + res.artists + res.albums + res.playlists)
+                    .filter { it.kind == ref.kind }
+                    .distinctBy { it.key }
+                val t = ref.title.trim().lowercase()
+                val byName = pool.firstOrNull { val n = it.title.trim().lowercase(); n.contains(t) || t.contains(n) }
+                val best = byName ?: if (ref.kind == CollectionKind.ALBUM) null else pool.firstOrNull()
+                if (best != null) AiEntityState.Found(best) else AiEntityState.Missing
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                AiEntityState.Missing
+            }
+            _aiEntities.update { it + (key to state) }
+        }
+    }
+
     private val _chat = MutableStateFlow<List<ChatMessage>>(emptyList())
     val chat: StateFlow<List<ChatMessage>> = _chat.asStateFlow()
     private val _chatBusy = MutableStateFlow(false)
@@ -375,17 +446,44 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _chatBusy.value = true
         chatJob?.cancel()
         chatJob = viewModelScope.launch {
+            // Jawaban dialirkan: pesan AI dibuat saat potongan pertama tiba, lalu teksnya diperbarui terus.
+            // Sebelum itu (menunggu), UI menampilkan titik animasi.
+            var streaming = false
+            fun dropPartial() {
+                if (streaming) {
+                    val cur = _chat.value
+                    if (cur.lastOrNull()?.fromUser == false) _chat.value = cur.dropLast(1)
+                    streaming = false
+                }
+            }
             try {
-                val reply = container.lyricsAnalyzer.chat(
+                val reply = container.lyricsAnalyzer.chatStream(
                     aiPrefs.apiKey.value, aiPrefs.idOf(model), history, q, answerLang(),
-                )
-                _chat.value = _chat.value + ChatMessage(false, reply)
+                ) { partial ->
+                    if (!isActive) return@chatStream // dibatalkan (obrolan diganti): jangan tulis ke obrolan lain
+                    val cur = _chat.value
+                    _chat.value = if (streaming && cur.lastOrNull()?.fromUser == false) {
+                        cur.dropLast(1) + ChatMessage(false, partial)
+                    } else {
+                        streaming = true
+                        cur + ChatMessage(false, partial)
+                    }
+                }
+                val cur = _chat.value
+                _chat.value = if (streaming && cur.lastOrNull()?.fromUser == false) {
+                    cur.dropLast(1) + ChatMessage(false, reply)
+                } else {
+                    cur + ChatMessage(false, reply)
+                }
                 saveConversation()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: app.tunes.ai.AiException) {
+                // Galat di tengah jalan: buang jawaban setengah jadi supaya "Coba lagi" bisa mengulang pertanyaannya.
+                dropPartial()
                 _chatError.value = e.kind
             } catch (e: Exception) {
+                dropPartial()
                 _chatError.value = app.tunes.ai.AiErrorKind.Server
             } finally {
                 _chatBusy.value = false

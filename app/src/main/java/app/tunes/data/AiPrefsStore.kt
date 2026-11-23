@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.asStateFlow
  * (bisa diganti pengguna di pengaturan karena daftar model gratis Google sering berubah).
  */
 enum class AiModel(val label: String, val defaultId: String) {
+    Olyuno35("Olyuno 3.5", "gemini-3.5-flash"),
     Olyuno38("Olyuno 3.8", "gemini-3.8-flash"),
     Olyuno4("Olyuno 4", "gemini-4-hydrogen"),
 }
