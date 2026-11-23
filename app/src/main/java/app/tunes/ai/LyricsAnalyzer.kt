@@ -1,6 +1,7 @@
 package app.tunes.ai
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.InternalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -225,6 +226,7 @@ class LyricsAnalyzer(cacheDir: File) {
     }
 
     /** Satu permintaan streaming (SSE). Membaca baris "data: {json}" satu per satu. */
+    @OptIn(InternalCoroutinesApi::class)
     private suspend fun stream(apiKey: String, modelId: String, body: JSONObject, onText: (String) -> Unit): String {
         val req = Request.Builder()
             .url("https://generativelanguage.googleapis.com/v1beta/models/${modelId.trim()}:streamGenerateContent?alt=sse")

@@ -308,6 +308,33 @@ private fun aiErrorText(kind: AiErrorKind): String = when (kind) {
     AiErrorKind.Server, AiErrorKind.Parse -> t("Terjadi gangguan pada AI, coba lagi")
 }
 
+/** Galat jawaban AI: pesan + satu tombol yang pas (atur kunci, buka pengaturan, atau coba lagi). */
+@Composable
+private fun ErrorRow(
+    kind: AiErrorKind,
+    onRetry: () -> Unit,
+    onSetKey: () -> Unit,
+    onSettings: () -> Unit,
+) {
+    val label: String? = when (kind) {
+        AiErrorKind.NoKey, AiErrorKind.BadKey -> t("Atur kunci API")
+        AiErrorKind.ModelNotFound -> t("Pengaturan")
+        AiErrorKind.Blocked -> null
+        else -> t("Coba lagi")
+    }
+    val action: () -> Unit = when (kind) {
+        AiErrorKind.NoKey, AiErrorKind.BadKey -> onSetKey
+        AiErrorKind.ModelNotFound -> onSettings
+        else -> onRetry
+    }
+    Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp)) {
+        Text(aiErrorText(kind), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
+        if (label != null) {
+            TextButton(onClick = action, contentPadding = PaddingValues(0.dp)) { Text(label) }
+        }
+    }
+}
+
 /** true selama keyboard layar terbuka. */
 @Composable
 private fun rememberImeVisible(): Boolean = WindowInsets.ime.getBottom(LocalDensity.current) > 0
