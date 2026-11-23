@@ -95,8 +95,8 @@ fun Modifier.topBlurSource(solid: Dp, fade: Dp = TOP_FADE): Modifier {
     remember(sharpBand, blurBand, blurPx) {
         blurBand.renderEffect = BlurEffect(blurPx, blurPx, TileMode.Clamp)
         // Offscreen: gradien (DstOut / DstIn) hanya memengaruhi isi layer ini, bukan halaman di belakangnya.
-        sharpBand.compositingStrategy = CompositingStrategy.Offscreen
-        blurBand.compositingStrategy = CompositingStrategy.Offscreen
+        sharpBand.compositingStrategy = androidx.compose.ui.graphics.layer.CompositingStrategy.Offscreen
+        blurBand.compositingStrategy = androidx.compose.ui.graphics.layer.CompositingStrategy.Offscreen
         sharpBand.clip = true
         blurBand.clip = true
     }
