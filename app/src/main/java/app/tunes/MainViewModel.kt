@@ -17,6 +17,7 @@ import app.tunes.innertube.CollectionRef
 import app.tunes.innertube.SearchResults
 import app.tunes.innertube.SongItem
 import app.tunes.innertube.MixPlaylist
+import app.tunes.innertube.AccountTab
 import app.tunes.innertube.accountInfo
 import app.tunes.innertube.isAuthError
 import app.tunes.innertube.fallbackGenres
@@ -496,8 +497,41 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val _mixStatus = MutableStateFlow(MixStatus.Idle)
     val mixStatus: StateFlow<MixStatus> = _mixStatus.asStateFlow()
 
+    /** Pemilik rak "Mix" di beranda YouTube Music (nama + foto akun); null = belum terbaca, pakai data akun biasa. */
+    private val _mixOwner = MutableStateFlow<AccountInfo?>(null)
+    val mixOwner: StateFlow<AccountInfo?> = _mixOwner.asStateFlow()
+
     private var mixJob: Job? = null
     private var mixLoadedAt = 0L
+
+    // ------------------------------------------------- halaman "Akun" (perpustakaan akun)
+    /** Isi satu tab halaman Akun. [items] null = belum pernah dimuat. */
+    data class AccountLibState(val items: List<CollectionRef>? = null, val loading: Boolean = false, val error: Boolean = false)
+
+    private val _accountLib = MutableStateFlow<Map<AccountTab, AccountLibState>>(emptyMap())
+    val accountLib: StateFlow<Map<AccountTab, AccountLibState>> = _accountLib.asStateFlow()
+    private val accountLibJobs = HashMap<AccountTab, Job>()
+
+    /** Muat satu tab halaman Akun dari YouTube Music. Tanpa [force], tab yang sudah termuat tidak diambil lagi. */
+    fun loadAccountTab(tab: AccountTab, force: Boolean = false) {
+        if (container.account.cookie() == null) return
+        val cur = _accountLib.value[tab]
+        if (cur?.loading == true) return
+        if (!force && cur?.items != null && !cur.error) return
+        accountLibJobs[tab]?.cancel()
+        _accountLib.value = _accountLib.value + (tab to AccountLibState(items = cur?.items, loading = true))
+        accountLibJobs[tab] = viewModelScope.launch {
+            try {
+                val list = container.sync.fetchAccountTab(tab)
+                _accountLib.value = _accountLib.value + (tab to AccountLibState(items = list.orEmpty()))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _accountLib.value = _accountLib.value + (tab to AccountLibState(items = cur?.items, error = true))
+                if (e.isAuthError()) _messages.tryEmit(t("Sesi YouTube Music habis, masuk lagi lewat tab Anda"))
+            }
+        }
+    }
 
     /**
      * Muat Mix & playlist akun dari YouTube Music. Daftar lama tetap tampil selama memuat atau kalau gagal.
@@ -511,9 +545,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             var error: Exception? = null
             for (attempt in 0..1) {
                 try {
-                    val list = container.sync.fetchMixPlaylists()
-                    if (list != null) {
-                        _mixPlaylists.value = list
+                    val feed = container.sync.fetchMixPlaylists()
+                    if (feed != null) {
+                        _mixPlaylists.value = feed.items
+                        // Nama + foto akun persis dari header rak Mix di YouTube Music (kalau ada).
+                        feed.owner?.let { _mixOwner.value = it }
                         mixLoadedAt = android.os.SystemClock.elapsedRealtime()
                     }
                     error = null
@@ -845,6 +881,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _remoteHistory.value = null
         mixJob?.cancel()
         _mixPlaylists.value = emptyList()
+        _mixOwner.value = null
+        accountLibJobs.values.forEach { it.cancel() }
+        accountLibJobs.clear()
+        _accountLib.value = emptyMap()
         _mixStatus.value = MixStatus.Idle
         mixLoadedAt = 0L
         container.account.clear()

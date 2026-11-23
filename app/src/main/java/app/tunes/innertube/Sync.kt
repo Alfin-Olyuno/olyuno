@@ -29,10 +29,10 @@ internal fun Throwable.isAuthError(): Boolean {
     return m.startsWith("HTTP 401") || m.startsWith("HTTP 403")
 }
 
-private fun requireAuth(cookie: String): Map<String, String> =
+internal fun requireAuth(cookie: String): Map<String, String> =
     authHeaders(cookie) ?: throw InnerTubeException(t("HTTP 401 (cookie tidak valid)"))
 
-private fun continuationToken(root: JsonObject): String? =
+internal fun continuationToken(root: JsonObject): String? =
     root.findAll("continuationCommand").firstNotNullOfOrNull { it["token"].text }
         ?: root.findAll("nextContinuationData").firstNotNullOfOrNull { it["continuation"].text }
 
@@ -97,34 +97,54 @@ data class MixPlaylist(val ref: CollectionRef, val isMix: Boolean)
 private const val MAX_HOME_MIXES = 10
 private const val MAX_MIX_PLAYLISTS = 20
 
-private fun JsonObject.runsText(vararg keys: Any): String =
+internal fun JsonObject.runsText(vararg keys: Any): String =
     path(*keys).objects().joinToString("") { it["text"].text.orEmpty() }.trim()
 
-private fun JsonObject.tileThumb(): String? =
+internal fun JsonObject.tileThumb(): String? =
     (path("thumbnailRenderer", "musicThumbnailRenderer", "thumbnail", "thumbnails") as? JsonArray)
         ?.lastOrNull().path("url").text?.hiRes()
 
-/** Mix asli YouTube Music di beranda akun (Supermix, Mix 1, Mix Terakhir Didengar, dst.), lengkap dengan sampul aslinya. */
-private suspend fun InnerTube.fetchHomeMixes(headers: Map<String, String>): List<MixPlaylist> {
-    val root = browse("FEmusic_home", headers = headers)
+/** Isi "Mix untukmu": kartu Mix + pemilik rak (nama & foto akun persis seperti header rak "Mix" di YouTube Music). */
+data class MixFeed(val items: List<MixPlaylist>, val owner: AccountInfo?)
+
+private const val HOME_PAGES = 4
+
+/**
+ * Mix asli YouTube Music di beranda akun (Supermix, Mix 1, Mix Terakhir Didengar, dst.), lengkap dengan sampul aslinya.
+ * Rak "Mix" sering ada di halaman lanjutan beranda, jadi beberapa halaman dibaca. Nama + foto akun diambil dari
+ * header rak itu (strapline + gambar), yaitu yang YouTube Music sendiri tampilkan di atas Mix.
+ */
+private suspend fun InnerTube.fetchHomeMixes(headers: Map<String, String>): Pair<List<MixPlaylist>, AccountInfo?> {
     val out = ArrayList<MixPlaylist>()
-    for (shelf in root.findAll("musicCarouselShelfRenderer")) {
-        val shelfTitle = shelf.path("header", "musicCarouselShelfBasicHeaderRenderer", "title", "runs", 0, "text").text.orEmpty()
-        val mixShelf = shelfTitle.contains("mix", ignoreCase = true)
-        for (r in shelf.findAll("musicTwoRowItemRenderer")) {
-            val nav = r["navigationEndpoint"]
-            val id = nav.path("watchPlaylistEndpoint", "playlistId").text
-                ?: nav.path("browseEndpoint", "browseId").text?.removePrefix("VL")
-                ?: continue
-            val isPersonalMix = id.startsWith("RDTMAK5uy_")
-            if (!isPersonalMix && !(mixShelf && id.startsWith("RD"))) continue
-            val title = r.runsText("title", "runs")
-            if (title.isBlank()) continue
-            val sub = r.runsText("subtitle", "runs").takeIf { it.isNotBlank() }
-            out += MixPlaylist(CollectionRef(CollectionKind.MIX, title, id, null, sub, r.tileThumb()), isMix = true)
+    var owner: AccountInfo? = null
+    for (root in browsePages("FEmusic_home", headers, HOME_PAGES)) {
+        for (shelf in root.findAll("musicCarouselShelfRenderer")) {
+            val head = shelf.path("header", "musicCarouselShelfBasicHeaderRenderer")
+            val shelfTitle = head.path("title", "runs", 0, "text").text.orEmpty()
+            val mixShelf = shelfTitle.contains("mix", ignoreCase = true)
+            if (mixShelf && owner == null) {
+                val name = head.path("strapline", "runs").objects().joinToString("") { it["text"].text.orEmpty() }.trim()
+                if (name.isNotBlank()) {
+                    val photo = (head.path("thumbnail", "musicThumbnailRenderer", "thumbnail", "thumbnails") as? JsonArray)
+                        ?.lastOrNull().path("url").text?.let(::normalizePhoto)
+                    owner = AccountInfo(name, photo)
+                }
+            }
+            for (r in shelf.findAll("musicTwoRowItemRenderer")) {
+                val nav = r["navigationEndpoint"]
+                val id = nav.path("watchPlaylistEndpoint", "playlistId").text
+                    ?: nav.path("browseEndpoint", "browseId").text?.removePrefix("VL")
+                    ?: continue
+                val isPersonalMix = id.startsWith("RDTMAK5uy_")
+                if (!isPersonalMix && !(mixShelf && id.startsWith("RD"))) continue
+                val title = r.runsText("title", "runs")
+                if (title.isBlank()) continue
+                val sub = r.runsText("subtitle", "runs").takeIf { it.isNotBlank() }
+                out += MixPlaylist(CollectionRef(CollectionKind.MIX, title, id, null, sub, r.tileThumb()), isMix = true)
+            }
         }
     }
-    return out.distinctBy { it.ref.browseId }.take(MAX_HOME_MIXES)
+    return out.distinctBy { it.ref.browseId }.take(MAX_HOME_MIXES) to owner
 }
 
 /** Playlist di perpustakaan akun (tanpa Disukai), apa adanya: judul, sampul, dan keterangan jumlah lagu dari YouTube Music. */
@@ -141,7 +161,7 @@ private suspend fun InnerTube.fetchLibraryPlaylists(headers: Map<String, String>
 }
 
 /** Isi "Mix untukmu": Mix asli beranda dulu, lalu playlist perpustakaan. Salah satu gagal tetap menampilkan yang lain. */
-suspend fun InnerTube.fetchMixPlaylists(cookie: String): List<MixPlaylist> {
+suspend fun InnerTube.fetchMixPlaylists(cookie: String): MixFeed {
     val headers = requireAuth(cookie)
     val (mixes, playlists) = coroutineScope {
         val a = async { runCatching { fetchHomeMixes(headers) } }
@@ -151,7 +171,9 @@ suspend fun InnerTube.fetchMixPlaylists(cookie: String): List<MixPlaylist> {
     (mixes.exceptionOrNull() as? CancellationException)?.let { throw it }
     (playlists.exceptionOrNull() as? CancellationException)?.let { throw it }
     if (mixes.isFailure && playlists.isFailure) throw mixes.exceptionOrNull()!!
-    return (mixes.getOrDefault(emptyList()) + playlists.getOrDefault(emptyList())).distinctBy { it.ref.browseId }
+    val home = mixes.getOrNull()
+    val items = (home?.first.orEmpty() + playlists.getOrDefault(emptyList())).distinctBy { it.ref.browseId }
+    return MixFeed(items, home?.second)
 }
 
 /** Isi satu Mix asli (lagu-lagunya) atas nama akun, supaya Mix personal seperti Supermix cocok dengan YouTube Music. */

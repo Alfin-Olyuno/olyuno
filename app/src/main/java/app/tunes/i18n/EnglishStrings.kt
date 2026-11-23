@@ -6,6 +6,12 @@ package app.tunes.i18n
  * Teks dengan nilai dinamis memakai penanda %s / %d (lihat t(id, args...)).
  */
 internal val EnglishStrings: Map<String, String> = mapOf(
+    "Akun" to "Account",
+    "Podcast" to "Podcasts",
+    "Gagal memuat dari YouTube Music" to "Couldn't load from YouTube Music",
+    "Belum ada artis di akun ini" to "No artists in this account yet",
+    "Belum ada album di akun ini" to "No albums in this account yet",
+    "Belum ada podcast di akun ini" to "No podcasts in this account yet",
     "Streak dimulai." to "Streak started.",
     "Streak %d hari." to "%d-day streak.",
     "Freeze terpakai, streak kamu aman." to "Freeze used, your streak is safe.",

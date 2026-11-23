@@ -39,7 +39,7 @@ private fun JsonObject.listVideoId(): String? =
 private fun thumbOf(thumbs: JsonElement?): String? =
     (thumbs as? JsonArray)?.lastOrNull().path("url").text?.hiRes()
 
-private fun entityOf(nav: JsonElement?, title: String, subtitle: String?, thumb: String?): CollectionRef? {
+internal fun entityOf(nav: JsonElement?, title: String, subtitle: String?, thumb: String?): CollectionRef? {
     val be = nav.path("browseEndpoint") ?: return null
     val id = be.path("browseId").text ?: return null
     val type = be.path(
@@ -226,7 +226,17 @@ internal fun InnerTube.collectSongs(
     val rows = scopes.flatMap { it.findAll("musicResponsiveListItemRenderer") }
         .mapNotNull { listItemSong(it, fallbackThumb, fallbackArtist, strictArtist) }
     val tiles = if (includeTwoRow) root.findAll("musicTwoRowItemRenderer").mapNotNull { twoRowSong(it) } else emptyList()
-    return (rows + tiles).distinctBy { it.videoId }
+    // Episode podcast (halaman acara podcast) memakai baris multi-kolom, bukan baris lagu biasa.
+    val episodes = root.findAll("musicMultiRowListItemRenderer").mapNotNull { episodeSong(it, fallbackThumb, fallbackArtist) }
+    return (rows + tiles + episodes).distinctBy { it.videoId }
+}
+
+private fun InnerTube.episodeSong(item: JsonObject, fallbackThumb: String?, fallbackArtist: String): SongItem? {
+    val id = item.path("onTap", "watchEndpoint", "videoId").text ?: return null
+    val title = item.path("title", "runs").objects().joined()
+    if (title.isBlank()) return null
+    val thumb = thumbOf(item.path("thumbnail", "musicThumbnailRenderer", "thumbnail", "thumbnails")) ?: fallbackThumb
+    return SongItem(id, title, fallbackArtist, 0, thumb)
 }
 
 // -------------------------------------------------------- Pilihan cepat
@@ -460,7 +470,11 @@ private suspend fun InnerTube.collectionData(ref: CollectionRef): CollectionData
             collectSongs(root, includeTwoRow = false, fallbackThumb = headerThumb, fallbackArtist = artist, strictArtist = true)
         }
 
-        else -> collectSongs(root, includeTwoRow = false, fallbackThumb = headerThumb)
+        else -> collectSongs(
+            root, includeTwoRow = false, fallbackThumb = headerThumb,
+            // Acara podcast: nama acara jadi "artis" tiap episode.
+            fallbackArtist = if (id.startsWith("MPSPP")) ref.title else "",
+        )
     }
     return CollectionData(result, collectionInfo(header, headerThumb))
 }

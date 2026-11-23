@@ -93,7 +93,7 @@ fun HomeScreen(
     mostPlayed: List<SongItem>,
     currentId: String?,
     onOpenLiked: () -> Unit,
-    onOpenLibrary: () -> Unit,
+    onOpenAccount: () -> Unit,
     onOpenStreak: () -> Unit = {},
 ) {
     // Cek ulang tiap menit supaya sapaan ikut berganti saat jam berubah.
@@ -111,6 +111,7 @@ fun HomeScreen(
     val recent by vm.recent.collectAsStateWithLifecycle()
     val topArtists by vm.topArtists.collectAsStateWithLifecycle()
     val account by vm.account.collectAsStateWithLifecycle()
+    val mixOwner by vm.mixOwner.collectAsStateWithLifecycle()
     val mixPlaylists by vm.mixPlaylists.collectAsStateWithLifecycle()
     val mixStatus by vm.mixStatus.collectAsStateWithLifecycle()
     val likedSongs by vm.liked.collectAsStateWithLifecycle()
@@ -219,7 +220,14 @@ fun HomeScreen(
         // ---- Mix untukmu: hanya kalau sudah masuk akun. Header akun (ketuk = buka Koleksi), lalu kartu persegi
         // berjejer ke kanan: Disukai dulu, lalu Mix asli YouTube Music, lalu playlist buatan akun (sampul asli).
         account?.let { acc ->
-            item(key = "mix_header") { MixHeader(acc, onClick = onOpenLibrary) }
+            item(key = "mix_header") {
+                // Nama + foto dari header rak Mix di YouTube Music kalau sudah terbaca, selain itu dari data akun.
+                val shown = AccountInfo(
+                    name = mixOwner?.name?.takeIf { it.isNotBlank() } ?: acc.name,
+                    photoUrl = mixOwner?.photoUrl ?: acc.photoUrl,
+                )
+                MixHeader(shown, onClick = onOpenAccount)
+            }
             item(key = "mix_row") {
                 LazyRow(
                     contentPadding = PaddingValues(horizontal = 16.dp),

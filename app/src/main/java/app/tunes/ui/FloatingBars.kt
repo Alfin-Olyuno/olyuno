@@ -127,10 +127,26 @@ private const val GAP = 8
 
 private fun lerpI(a: Int, b: Int, t: Float): Int = (a + (b - a) * t).toInt()
 
-/** Latar bilah: kaca (blur) kalau gaya Kaca, selain itu warna solid; keduanya dengan garis tipis. */
+/**
+ * Latar bilah: kaca (blur) kalau gaya Kaca, selain itu warna solid; keduanya dengan garis tipis.
+ * [motion] = nilai animasi tambahan yang menggerakkan bilah lewat `graphicsLayer` (di luar tarikan layar pemutar,
+ * yang sudah otomatis ikut), supaya blur di dalam bilah digambar ulang selama bilah bergerak.
+ */
 @Composable
-private fun Modifier.barSurface(shape: Shape, solid: Color, tintAlpha: Float, config: GlassConfig): Modifier {
-    val base = if (config.enabled) glass(shape, glassBase(solid).copy(alpha = BAR_GLASS_ALPHA), config, minAlpha = BAR_GLASS_ALPHA) else clip(shape).background(solid)
+private fun Modifier.barSurface(
+    shape: Shape,
+    solid: Color,
+    tintAlpha: Float,
+    config: GlassConfig,
+    motion: () -> Float = { 0f },
+): Modifier {
+    val sheet = LocalPlayerSheet.current
+    val base = if (config.enabled) {
+        glass(
+            shape, glassBase(solid).copy(alpha = BAR_GLASS_ALPHA), config, minAlpha = BAR_GLASS_ALPHA,
+            motion = { (sheet?.progress?.value ?: 0f) + motion() },
+        )
+    } else clip(shape).background(solid)
     return base.border(0.5.dp, MaterialTheme.colorScheme.outlineVariant, shape)
 }
 
@@ -385,7 +401,10 @@ fun CollapsingMiniPlayer(
                     Modifier
                         .fillMaxSize()
                         .followPlayerSheet(-1f)
-                        .barSurface(BarShape, MaterialTheme.colorScheme.surfaceContainerHigh, 0.55f, glass)
+                        .barSurface(
+                            BarShape, MaterialTheme.colorScheme.surfaceContainerHigh, 0.55f, glass,
+                            motion = { tabRise.value },
+                        )
                         .clickable(onClick = onOpenPlayer),
                 ) {
                     MiniPillContent(player, song, progress, onToggle, onNext, onPrevious)
@@ -479,7 +498,10 @@ fun FloatingBars(
                     Modifier
                         .fillMaxSize()
                         .followPlayerSheet(-1f)
-                        .barSurface(BarShape, MaterialTheme.colorScheme.surfaceContainerHigh, 0.55f, glass)
+                        .barSurface(
+                            BarShape, MaterialTheme.colorScheme.surfaceContainerHigh, 0.55f, glass,
+                            motion = { pageDrop * (1f - progress.value) + progress.value },
+                        )
                         .clickable(onClick = onOpenPlayer),
                 ) {
                     MiniPillContent(player, song, progress, onToggle, onNext, onPrevious)
@@ -499,7 +521,10 @@ fun FloatingBars(
                     }
                 }
                 .followPlayerSheet(1f)
-                .barSurface(BarShape, MaterialTheme.colorScheme.surfaceContainer, 0.6f, glass),
+                .barSurface(
+                    BarShape, MaterialTheme.colorScheme.surfaceContainer, 0.6f, glass,
+                    motion = { progress.value },
+                ),
         ) {
             if (showFull) {
                 Box(
@@ -583,7 +608,7 @@ fun RefreshFab(
                 alpha = shown
             }
             .followPlayerSheet(-1f)
-            .barSurface(CircleShape, MaterialTheme.colorScheme.surfaceContainerHigh, 0.55f, glass)
+            .barSurface(CircleShape, MaterialTheme.colorScheme.surfaceContainerHigh, 0.55f, glass, motion = { shown })
             .clip(CircleShape)
             .clickable {
                 onClick()

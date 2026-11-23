@@ -9,6 +9,12 @@ data class AccountInfo(val name: String, val photoUrl: String?)
 private fun sha1Hex(s: String): String =
     MessageDigest.getInstance("SHA-1").digest(s.toByteArray()).joinToString("") { "%02x".format(it) }
 
+/** URL foto akun Google: pastikan https dan ukuran cukup besar (=s256). */
+internal fun normalizePhoto(url: String): String {
+    val full = if (url.startsWith("//")) "https:$url" else url
+    return full.replace(Regex("=s\\d+"), "=s256")
+}
+
 /** Header login (cookie + SAPISIDHASH) untuk request yang bertindak atas nama akun. Null kalau cookie tidak lengkap. */
 internal fun authHeaders(cookie: String): Map<String, String>? {
     val sapisid = Regex("(?:^|;\\s*)SAPISID=([^;]+)").find(cookie)?.groupValues?.get(1)
@@ -35,10 +41,7 @@ suspend fun InnerTube.accountInfo(cookie: String): AccountInfo? {
     val header = root.findAll("activeAccountHeaderRenderer").firstOrNull() ?: return null
     val name = header.path("accountName", "runs").objects().joinToString("") { it["text"].text.orEmpty() }
     if (name.isBlank()) return null
-    var photo = (header.path("accountPhoto", "thumbnails") as? JsonArray)?.lastOrNull().path("url").text
-    if (photo != null) {
-        if (photo.startsWith("//")) photo = "https:$photo"
-        photo = photo.replace(Regex("=s\\d+"), "=s256")
-    }
+    val photo = ((header.path("accountPhoto", "thumbnails") ?: header.path("accountPhoto", "thumbnail", "thumbnails")) as? JsonArray)
+        ?.lastOrNull().path("url").text?.let(::normalizePhoto)
     return AccountInfo(name, photo)
 }

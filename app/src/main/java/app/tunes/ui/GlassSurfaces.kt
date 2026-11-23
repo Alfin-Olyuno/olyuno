@@ -73,10 +73,10 @@ fun Modifier.modalOption(selected: Boolean, onClick: () -> Unit): Modifier {
 private const val DIALOG_DIM = 0.5f
 
 /** Kepekatan kaca (0..1). Tinggi = hampir tidak tembus, jadi gambar di belakang bilah tidak terlihat jelas. */
-const val GLASS_ALPHA = 0.92f
+const val GLASS_ALPHA = 0.86f
 
 /** Kepekatan kaca khusus bilah tab & pemutar mini: sedikit lebih tembus dari [GLASS_ALPHA]; cukup pekat supaya warna isi di belakang tidak menempel. */
-const val BAR_GLASS_ALPHA = 0.88f
+const val BAR_GLASS_ALPHA = 0.86f
 
 /** true kalau tema sedang terang (latar terang): kaca dibuat putih. Di tema gelap kaca tetap gelap. */
 @Composable

@@ -109,6 +109,8 @@ fun OlyunoRoot(
     // Halaman Tentang Olyuno (andaPage == 12) bisa dibuka dari tab Anda atau Pengaturan; ini halaman tujuan saat kembali (-1 atau 3).
     var aboutBackTo by rememberSaveable { mutableIntStateOf(-1) }
     var showLogin by rememberSaveable { mutableStateOf(false) }
+    // Halaman "Akun" (perpustakaan akun YouTube Music), dibuka dari panah di "Mix untukmu" di Beranda.
+    var accountPage by rememberSaveable { mutableStateOf(false) }
     val context = androidx.compose.ui.platform.LocalContext.current
     var showPlayer by rememberSaveable { mutableStateOf(false) }
     // Layar pemutar: progres 0..1 yang bisa ditarik dari pemutar mini mana pun (lihat PlayerSheet.kt).
@@ -139,6 +141,7 @@ fun OlyunoRoot(
             libraryPage = -1
             andaPage = -1
             showLogin = false
+            accountPage = false
             vm.closeCollection()
             tab = 1
             onOpenSearchConsumed()
@@ -179,6 +182,9 @@ fun OlyunoRoot(
         if (libraryPage == 0) vm.refreshRecent()
     }
 
+    // Keluar akun: halaman Akun ditutup.
+    LaunchedEffect(account) { if (account == null) accountPage = false }
+
     // Tutup layar pemutar kalau tidak ada lagu lagi.
     LaunchedEffect(currentId) {
         if (currentId == null) showPlayer = false
@@ -201,7 +207,7 @@ fun OlyunoRoot(
     val glass = LocalGlass.current.let { remember(it.enabled, backdrop) { GlassConfig(it.enabled, backdrop) } }
 
     // Tab dasar tertutup kalau ada halaman penuh di atasnya: bergeser tipis + meredup, dan tidak menerima sentuhan.
-    val baseCovered = openCollection != null || libraryPage >= 0 || andaPage >= 0 || showLogin
+    val baseCovered = openCollection != null || libraryPage >= 0 || andaPage >= 0 || showLogin || accountPage
     // Halaman penuh pertama baru dibuka dari tab dasar: pemutar mini di halaman itu meluncur turun dari posisi di atas bilah tab.
     val prevCovered = remember { booleanArrayOf(baseCovered) }
     val miniFromTabs = baseCovered && !prevCovered[0] && !barsCollapse.collapsed
@@ -262,7 +268,7 @@ fun OlyunoRoot(
               ) {
                 TabEnter(tab) {
                 when (tab) {
-                    0 -> HomeScreen(vm, mostPlayed, currentId, onOpenLiked = { libraryPage = 1 }, onOpenLibrary = { tab = 2 }, onOpenStreak = { andaPage = 14 })
+                    0 -> HomeScreen(vm, mostPlayed, currentId, onOpenLiked = { libraryPage = 1 }, onOpenAccount = { accountPage = true }, onOpenStreak = { andaPage = 14 })
                     1 -> SearchScreen(vm, currentId)
                     2 -> CollectionHomeScreen(
                         onOpenRecent = { libraryPage = 0 },
@@ -325,6 +331,17 @@ fun OlyunoRoot(
 
         val heldLibraryPage = remember { mutableIntStateOf(0) }
         if (libraryPage >= 0) heldLibraryPage.intValue = libraryPage
+
+        // Akun: tertutup saat halaman artis / album / playlist dibuka dari daftarnya, atau halaman Disukai dibuka dari baris Disukai.
+        PageTransition(visible = accountPage, covered = openCollection != null || libraryPage >= 0) {
+            AccountPage(
+                vm = vm,
+                player = player,
+                onBack = { accountPage = false },
+                onOpenLiked = { libraryPage = 1 },
+                onOpenPlayer = { showPlayer = true },
+            )
+        }
 
         PageTransition(visible = libraryPage in 0..1) {
             SongListPage(

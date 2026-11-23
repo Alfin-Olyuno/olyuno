@@ -30,7 +30,6 @@ import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.coerceAtLeast
@@ -141,21 +140,24 @@ private fun BlurLayer(backdrop: GlassBackdrop, radius: Dp, solidFraction: Float,
     remember(blurLayer, blurPx) {
         blurLayer.renderEffect = BlurEffect(blurPx, blurPx, TileMode.Clamp)
     }
-    var pos by remember { mutableStateOf(Offset.Zero) }
+    val anchor = remember { GlassAnchor() }
     val solidAt = solidFraction.coerceIn(0f, endFraction)
 
     Box(
         Modifier
             .fillMaxSize()
-            .onGloballyPositioned { pos = it.positionInWindow() }
+            .onGloballyPositioned { anchor.update(it) }
             .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
             .drawWithContent {
-                val dx = pos.x - backdrop.origin.x
-                val dy = pos.y - backdrop.origin.y
+                backdrop.observeLayout()
+                anchor.observeLayout()
+                // Posisi pita terhadap isi halaman dihitung saat ini (bukan angka tersimpan yang bisa basi);
+                // belum bisa dihitung = jangan gambar apa pun, daripada menggambar salinan yang bergeser.
+                val at = backdrop.offsetOf(anchor.coordinates) ?: return@drawWithContent
                 blurLayer.record {
                     // Alas solid supaya area kosong tidak dibur menjadi bercak warna (lihat Modifier.glass).
                     drawRect(pageBg)
-                    translate(-dx, -dy) {
+                    translate(-at.x, -at.y) {
                         val area = androidx.compose.ui.geometry.Size(
                             backdrop.layer.size.width.toFloat(), backdrop.layer.size.height.toFloat(),
                         )
