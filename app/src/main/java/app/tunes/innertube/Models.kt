@@ -92,3 +92,15 @@ data class SearchResults(
     val isEmpty: Boolean
         get() = top.isEmpty() && songs.isEmpty() && artists.isEmpty() && playlists.isEmpty() && albums.isEmpty()
 }
+
+/**
+ * Satu bagian "Mirip dengan [artis]" di Beranda: artis yang sering didengar ([artist]) beserta
+ * artis-artis yang mirip menurut YouTube Music ([similar], rak "Fans might also like" di halaman artisnya).
+ */
+data class SimilarArtists(
+    val artist: String,
+    val artistThumbnail: String?,
+    /** Halaman artis asli (browseId sudah ada), supaya header bisa langsung dibuka. */
+    val artistRef: CollectionRef,
+    val similar: List<CollectionRef>,
+)

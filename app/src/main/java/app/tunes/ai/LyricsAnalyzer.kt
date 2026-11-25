@@ -1,6 +1,9 @@
 package app.tunes.ai
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.InternalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
@@ -16,7 +19,7 @@ import java.io.File
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 
-/** Hasil Tanya AI satu lagu. [background] null = AI tidak cukup yakin soal latar belakang. */
+/** Hasil Olyuno AI satu lagu. [background] null = AI tidak cukup yakin soal latar belakang. */
 data class LyricsAnalysis(
     val summary: String,
     val themes: List<String>,
@@ -197,6 +200,11 @@ class LyricsAnalyzer(cacheDir: File) {
     /**
      * Seperti [chat], tapi jawaban dialirkan (streaming): [onText] dipanggil berulang dengan SELURUH teks yang sudah
      * diterima sejauh ini (bukan hanya potongan baru), dari thread IO. Mengembalikan teks akhir.
+     *
+     * Kalau [tools] diberikan, Olyuno AI boleh memanggil alat (cari lagu / lirik / artis / album / playlist) di tengah
+     * jawaban: [onStatus] menerima nama kegiatan yang sedang berjalan (null = selesai) dan [onReset] dipanggil kalau
+     * teks yang sudah sempat tampil harus dibuang karena AI ternyata memanggil alat. Kalau jalur alat gagal sebelum ada
+     * teks yang tampil (mis. server menolak alat), jawaban diulang tanpa alat supaya obrolan tetap jalan.
      * Gangguan sementara dicoba ulang sekali, hanya kalau belum ada teks yang sempat diterima.
      */
     suspend fun chatStream(
@@ -205,29 +213,106 @@ class LyricsAnalyzer(cacheDir: File) {
         history: List<Pair<Boolean, String>>,
         question: String,
         lang: String,
+        tools: AiTools? = null,
+        onStatus: (String?) -> Unit = {},
+        onReset: () -> Unit = {},
         onText: (String) -> Unit,
     ): String = withContext(Dispatchers.IO) {
         if (deviceId.isBlank()) throw AiException(AiErrorKind.NoKey)
+        var received = false
+        if (tools != null) {
+            try {
+                return@withContext agent(deviceId, modelId, chatContents(history, question), lang, tools, onStatus, onReset) {
+                    received = true
+                    onText(it)
+                }
+            } catch (e: AiException) {
+                onStatus(null)
+                // Hanya gangguan server / keluaran rusak yang diulang tanpa alat; kunci, kuota, jaringan, dll. langsung dilaporkan.
+                if (received || e.kind !in RETRYABLE) throw e
+            }
+        }
+        val body = JSONObject()
+            .put("systemInstruction", textContent(null, SYSTEM_GENERAL + " Bahasa jawaban: " + lang + "."))
+            .put("contents", chatContents(history, question))
+            .put("generationConfig", JSONObject().put("temperature", 0.7))
+        var got = false
+        try {
+            streamTurn(deviceId, modelId, body) { got = true; onText(it) }.text.trim()
+        } catch (e: AiException) {
+            if (!got && e.kind in RETRYABLE) streamTurn(deviceId, modelId, body) { onText(it) }.text.trim() else throw e
+        }
+    }
+
+    private fun chatContents(history: List<Pair<Boolean, String>>, question: String): JSONArray {
         val contents = JSONArray()
         history.takeLast(MAX_CHAT_TURNS).forEach { (fromUser, text) ->
             contents.put(textContent(if (fromUser) "user" else "model", text.take(3000)))
         }
         contents.put(textContent("user", question.take(1500)))
-        val body = JSONObject()
-            .put("systemInstruction", textContent(null, SYSTEM_GENERAL + " Bahasa jawaban: " + lang + "."))
-            .put("contents", contents)
-            .put("generationConfig", JSONObject().put("temperature", 0.7))
-        var received = false
-        try {
-            stream(deviceId, modelId, body) { received = true; onText(it) }
-        } catch (e: AiException) {
-            if (!received && e.kind in RETRYABLE) stream(deviceId, modelId, body) { onText(it) } else throw e
+        return contents
+    }
+
+    /**
+     * Putaran function calling: kirim percakapan + alat; kalau AI meminta alat, jalankan (bersamaan) lalu kirim hasilnya
+     * dan ulangi, sampai AI menjawab dengan teks. Setelah [MAX_TOOL_ROUNDS] putaran alat dicabut supaya pasti ada jawaban.
+     */
+    private suspend fun agent(
+        deviceId: String,
+        modelId: String,
+        contents: JSONArray,
+        lang: String,
+        tools: AiTools,
+        onStatus: (String?) -> Unit,
+        onReset: () -> Unit,
+        onText: (String) -> Unit,
+    ): String {
+        var rounds = 0
+        while (true) {
+            val useTools = rounds < MAX_TOOL_ROUNDS
+            val body = JSONObject()
+                .put("systemInstruction", textContent(null, SYSTEM_TOOLS + " Bahasa jawaban: " + lang + "."))
+                .put("contents", contents)
+                .put("generationConfig", JSONObject().put("temperature", 0.7))
+            if (useTools) {
+                body.put("tools", JSONArray().put(JSONObject().put("functionDeclarations", tools.declarations())))
+            }
+            var emitted = false
+            val turn = streamTurn(deviceId, modelId, body) { emitted = true; onText(it) }
+            if (turn.calls.isEmpty() || !useTools) {
+                onStatus(null)
+                if (turn.text.isBlank()) throw AiException(AiErrorKind.Parse)
+                return turn.text.trim()
+            }
+            // Teks pembuka sebelum alat dipanggil tidak ikut jadi jawaban.
+            if (emitted) onReset()
+            onStatus(tools.statusOf(turn.calls.first().name))
+            contents.put(JSONObject().put("role", "model").put("parts", turn.parts))
+            val results = coroutineScope {
+                turn.calls.map { c -> async { c to tools.run(c.name, c.args) } }.awaitAll()
+            }
+            val responses = JSONArray()
+            for ((c, result) in results) {
+                responses.put(
+                    JSONObject().put(
+                        "functionResponse",
+                        JSONObject().put("name", c.name).put("response", result),
+                    ),
+                )
+            }
+            contents.put(JSONObject().put("role", "user").put("parts", responses))
+            rounds++
         }
     }
 
+    private class ToolCall(val name: String, val args: JSONObject)
+
+    /** Satu giliran model: [text] = teks jawaban, [parts] = bagian mentah (dikirim balik apa adanya saat ada alat), [calls] = alat yang diminta. */
+    private class Turn(val text: String, val parts: JSONArray, val calls: List<ToolCall>)
+
     /** Satu permintaan streaming (SSE). Membaca baris "data: {json}" satu per satu. */
     @OptIn(InternalCoroutinesApi::class)
-    private suspend fun stream(deviceId: String, modelId: String, body: JSONObject, onText: (String) -> Unit): String {
+    private suspend fun streamTurn(deviceId: String, modelId: String, body: JSONObject, onText: (String) -> Unit): Turn {
         val req = Request.Builder()
             .url("$AI_BASE/${modelId.trim()}:streamGenerateContent?alt=sse")
             .header("x-device-id", deviceId)
@@ -237,6 +322,8 @@ class LyricsAnalyzer(cacheDir: File) {
         // Batalkan koneksi saat coroutine dibatalkan (mis. pengguna membuka obrolan lain), supaya tidak menggantung.
         val handle = currentCoroutineContext()[Job]?.invokeOnCompletion(onCancelling = true) { call.cancel() }
         val acc = StringBuilder()
+        val rawParts = JSONArray()
+        val calls = ArrayList<ToolCall>()
         var blocked = false
         var finish = ""
         try {
@@ -263,7 +350,22 @@ class LyricsAnalyzer(cacheDir: File) {
                     for (i in 0 until parts.length()) {
                         val part = parts.optJSONObject(i) ?: continue
                         if (part.optBoolean("thought", false)) continue
-                        delta += part.optString("text")
+                        val fc = part.optJSONObject("functionCall")
+                        if (fc != null) {
+                            val n = fc.optString("name")
+                            if (n.isNotEmpty()) {
+                                calls += ToolCall(n, fc.optJSONObject("args") ?: JSONObject())
+                                rawParts.put(part)
+                            }
+                            continue
+                        }
+                        val tx = part.optString("text")
+                        if (tx.isNotEmpty()) {
+                            delta += tx
+                            rawParts.put(part)
+                        } else if (part.has("thoughtSignature")) {
+                            rawParts.put(part)
+                        }
                     }
                     if (delta.isNotEmpty()) {
                         acc.append(delta)
@@ -278,14 +380,14 @@ class LyricsAnalyzer(cacheDir: File) {
         } finally {
             handle?.dispose()
         }
-        if (acc.isBlank()) {
+        if (acc.isBlank() && calls.isEmpty()) {
             throw AiException(if (blocked || finish == "SAFETY") AiErrorKind.Blocked else AiErrorKind.Parse)
         }
-        return acc.toString().trim()
+        return Turn(acc.toString(), rawParts, calls)
     }
 
     private fun httpError(code: Int, msg: String, status: String = ""): AiException = when {
-        // Status dari proxy Olyuno: Tanya AI dimatikan admin / belum ada kunci aktif.
+        // Status dari proxy Olyuno: Olyuno AI dimatikan admin / belum ada kunci aktif.
         status == "AI_DISABLED" || status == "NO_KEY" -> AiException(AiErrorKind.NoKey, msg)
         code == 404 -> AiException(AiErrorKind.ModelNotFound, msg)
         code == 429 -> AiException(AiErrorKind.Quota, msg)
@@ -341,8 +443,9 @@ class LyricsAnalyzer(cacheDir: File) {
         const val MAX_LYRICS = 6000
         const val MAX_TURNS = 8
         const val MAX_CHAT_TURNS = 20
+        const val MAX_TOOL_ROUNDS = 5
         const val SYSTEM_GENERAL =
-            "Kamu Olyuno, asisten AI di aplikasi musik Olyuno. Olyuno dikembangkan oleh PINZZ, seorang solo developer (mengerjakannya sendirian, tanpa tim). Kalau ditanya siapa yang membuat atau mengembangkan Olyuno, jawab itu dan jangan menambah detail tentang dirinya yang tidak kamu ketahui. Bantu pengguna soal musik: makna lirik, latar belakang lagu, artis, album, genre, playlist, rekomendasi. " +
+            "Kamu Olyuno AI, asisten AI di aplikasi musik Olyuno. Olyuno dikembangkan oleh PINZZ, seorang solo developer (mengerjakannya sendirian, tanpa tim). Kalau ditanya siapa yang membuat atau mengembangkan Olyuno, jawab itu dan jangan menambah detail tentang dirinya yang tidak kamu ketahui. Bantu pengguna soal musik: makna lirik, latar belakang lagu, artis, album, genre, playlist, rekomendasi. " +
                 "Gaya jawaban: langsung ke inti, tanpa basa-basi pembuka (jangan mulai dengan \"Tentu\", \"Baik\", atau mengulang pertanyaan). Kalimat pertama sudah memuat jawaban utamanya. " +
                 "Susun jawaban supaya mudah dipindai di layar HP: paragraf pendek (maksimal 3 kalimat); daftar berpoin (- ) untuk beberapa hal yang setara; " +
                 "daftar bernomor (1. ) untuk urutan, peringkat, atau rekomendasi; **huruf tebal** untuk judul lagu, nama artis, dan istilah kunci. " +
@@ -359,6 +462,17 @@ class LyricsAnalyzer(cacheDir: File) {
                 "Blok playlist: [[PLAYLIST]] lalu satu playlist per baris berformat Judul | Pembuat, lalu [[/PLAYLIST]] (untuk playlist, tulis judul yang bisa dipakai untuk mencarinya). " +
                 "Jangan menulis label atau judul seperti \"Lagu:\" atau \"Artis:\" sebelum blok; tulis penandanya saja. " +
                 "Tulis hanya blok yang relevan, maksimal 5 item per blok, hanya yang nyata dan kamu yakin ada, urut dari yang paling dibahas. Kalau tidak ada yang dibahas, jangan tulis blok apa pun."
+
+        /** SYSTEM_GENERAL + aturan memakai alat. Dipakai hanya saat alat dikirim bersama permintaan. */
+        const val SYSTEM_TOOLS = SYSTEM_GENERAL +
+            " ALAT: kamu punya alat untuk mencari di YouTube Music dan layanan lirik; panggil sendiri, jangan minta pengguna yang mencari. " +
+            "Untuk setiap permintaan mencari atau merekomendasikan lagu, artis, album, atau playlist, WAJIB pakai alatnya (search_songs, search_artists, search_albums, search_playlists, get_collection_tracks), jangan menjawab dari ingatan. " +
+            "Kalau pengguna hanya ingat potongan lirik atau menceritakan isi liriknya, panggil search_lyrics dengan potongan itu. Kalau hasilnya tidak cocok tapi kamu punya tebakan judulnya, verifikasi dengan check_lyrics sebelum menyebutnya. " +
+            "Untuk pertanyaan makna atau arti lirik sebuah lagu, ambil liriknya dengan get_lyrics lebih dulu. " +
+            "Boleh memanggil beberapa alat sekaligus, dan memanggil lagi kalau hasil pertama kurang. Sebut hanya lagu, artis, album, atau playlist yang muncul di hasil alat; jangan mengarang. " +
+            "match \"exact\" = potongan lirik ditemukan utuh di lirik lagu itu, \"partial\" = sebagian cocok, \"no_lyrics\" = liriknya tidak tersedia sehingga tidak bisa dipastikan. " +
+            "Kalau tidak ada hasil yang yakin, katakan jujur dan tawarkan cara lain. Jangan menyebut nama alat atau istilah teknis kepada pengguna. " +
+            "Blok [[LAGU]], [[ARTIS]], [[ALBUM]], [[PLAYLIST]] di akhir jawaban diisi dari hasil alat dengan judul dan artis persis seperti di hasil."
 
         val RETRYABLE = setOf(AiErrorKind.Server, AiErrorKind.Parse)
 

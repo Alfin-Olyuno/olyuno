@@ -9,7 +9,7 @@ import org.json.JSONObject
 import java.io.File
 
 /**
- * Satu percakapan Tanya AI = satu lagu: lagunya, model terakhir, dan obrolan "Tanya lebih lanjut".
+ * Satu percakapan Olyuno AI = satu lagu: lagunya, model terakhir, dan obrolan "Tanya lebih lanjut".
  * Hasil analisisnya sendiri ada di cache LyricsAnalyzer; membuka entri memakai cache itu (atau memanggil AI lagi bila hilang).
  */
 data class BedahEntry(
@@ -24,7 +24,7 @@ data class BedahEntry(
     val chat: List<Pair<Boolean, String>>,
 )
 
-/** Riwayat Tanya AI, disimpan sebagai satu berkas JSON di filesDir (tidak ikut cadangan karena allowBackup mati). */
+/** Riwayat Olyuno AI, disimpan sebagai satu berkas JSON di filesDir (tidak ikut cadangan karena allowBackup mati). */
 class BedahHistoryStore(context: Context) {
     private val file = File(context.filesDir, "bedah_history.json")
     private val lock = Any()

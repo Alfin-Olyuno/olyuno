@@ -23,6 +23,17 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.Explore
+import androidx.compose.material.icons.rounded.Favorite
+import androidx.compose.material.icons.rounded.History
+import androidx.compose.material.icons.rounded.LibraryMusic
+import androidx.compose.material.icons.rounded.Mail
+import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.Check
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.width
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -79,7 +90,7 @@ fun InfoPage(
             topBar = {
                 TopAppBar(
                     colors = translucentBarColors(),
-                    title = { Text("Informasi") },
+                    title = { Text(t("Informasi")) },
                     navigationIcon = {
                         IconButton(onClick = { if (open != null) openId = null else onBack() }) {
                             Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = t("Kembali"))
@@ -95,11 +106,15 @@ fun InfoPage(
                 if (open == null) {
                     LazyColumn(
                         Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(top = LocalTopInset.current, bottom = LocalBottomInset.current),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        contentPadding = PaddingValues(top = LocalTopInset.current, bottom = 16.dp + LocalBottomInset.current),
                     ) {
-                        items(INFO_MESSAGES, key = { it.id }) { msg ->
-                            InfoRow(msg, unread = msg.id !in readIds, onClick = { openId = msg.id })
+                        item {
+                            MenuGroup {
+                                INFO_MESSAGES.forEachIndexed { i, msg ->
+                                    if (i > 0) MenuDivider()
+                                    InfoRow(msg, unread = msg.id !in readIds, onClick = { openId = msg.id })
+                                }
+                            }
                         }
                     }
                 } else {
@@ -109,22 +124,42 @@ fun InfoPage(
     }
 }
 
+/** Kotak ikon bersudut membulat: berwarna aksen kalau pesan belum dibuka, netral kalau sudah. */
+@Composable
+private fun InfoTile(icon: ImageVector, accent: Boolean, size: androidx.compose.ui.unit.Dp = 44.dp) {
+    val scheme = MaterialTheme.colorScheme
+    Box(
+        Modifier
+            .size(size)
+            .clip(RoundedCornerShape(14.dp))
+            .background(if (accent) scheme.primaryContainer else scheme.surfaceContainerHighest),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            icon,
+            contentDescription = null,
+            tint = if (accent) scheme.onPrimaryContainer else scheme.onSurfaceVariant,
+            modifier = Modifier.size(size * 0.5f),
+        )
+    }
+}
+
 @Composable
 private fun InfoRow(msg: InfoMessage, unread: Boolean, onClick: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
-            .padding(horizontal = 8.dp)
-            .clip(RoundedCornerShape(18.dp))
             .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 12.dp),
+            .heightIn(min = 72.dp)
+            .padding(horizontal = 20.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Column(Modifier.weight(1f)) {
+        InfoTile(Icons.Rounded.Mail, accent = unread)
+        Column(Modifier.weight(1f).padding(start = 16.dp)) {
             Text(
                 t(msg.title),
                 style = MaterialTheme.typography.titleMedium,
-                fontWeight = if (unread) FontWeight.Bold else FontWeight.Normal,
+                fontWeight = if (unread) FontWeight.SemiBold else FontWeight.Normal,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -140,7 +175,7 @@ private fun InfoRow(msg: InfoMessage, unread: Boolean, onClick: () -> Unit) {
             Box(
                 Modifier
                     .padding(start = 12.dp)
-                    .size(10.dp)
+                    .size(8.dp)
                     .clip(CircleShape)
                     .background(MaterialTheme.colorScheme.primary),
             )
@@ -148,43 +183,73 @@ private fun InfoRow(msg: InfoMessage, unread: Boolean, onClick: () -> Unit) {
     }
 }
 
+/** Ikon untuk butir fitur menurut labelnya; label lain jatuh ke ikon centang. */
+private fun bulletIcon(label: String): ImageVector = when (label.trim().lowercase()) {
+    "temukan" -> Icons.Rounded.Explore
+    "pencarian" -> Icons.Rounded.Search
+    "koleksi" -> Icons.Rounded.LibraryMusic
+    "disukai" -> Icons.Rounded.Favorite
+    "riwayat" -> Icons.Rounded.History
+    else -> Icons.Rounded.Check
+}
+
 @Composable
 private fun InfoDetail(msg: InfoMessage) {
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
     Column(
         Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 20.dp, vertical = 8.dp)
-            .padding(top = LocalTopInset.current, bottom = LocalBottomInset.current),
+            .padding(top = LocalTopInset.current, bottom = 24.dp + LocalBottomInset.current),
     ) {
-        Text(t(msg.title), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.height(12.dp))
-        for (block in msg.blocks) {
-            when (block) {
+        Column(Modifier.padding(start = 24.dp, end = 24.dp, top = 20.dp, bottom = 4.dp)) {
+            InfoTile(Icons.Rounded.Mail, accent = true, size = 52.dp)
+            Spacer(Modifier.height(16.dp))
+            Text(t(msg.title), style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+        }
+        var i = 0
+        while (i < msg.blocks.size) {
+            when (val block = msg.blocks[i]) {
                 is InfoBlock.Heading -> {
-                    Spacer(Modifier.height(8.dp))
-                    Text(t(block.text), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                    Spacer(Modifier.height(6.dp))
+                    SectionTitle(t(block.text))
+                    i++
                 }
                 is InfoBlock.Paragraph -> {
-                    Text(t(block.text), style = MaterialTheme.typography.bodyLarge)
-                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        t(block.text),
+                        style = MaterialTheme.typography.bodyLarge.copy(lineHeight = 24.sp),
+                        modifier = Modifier.padding(horizontal = 24.dp, vertical = 6.dp),
+                    )
+                    i++
                 }
                 is InfoBlock.Bullet -> {
-                    Row(Modifier.padding(start = 4.dp, bottom = 6.dp)) {
-                        Text("•", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(end = 10.dp))
-                        Text(
-                            buildAnnotatedString {
-                                withStyle(SpanStyle(fontWeight = FontWeight.SemiBold)) { append(t(block.label)) }
-                                append(": ")
-                                append(t(block.text))
-                            },
-                            style = MaterialTheme.typography.bodyLarge,
-                        )
+                    // Butir yang berurutan dikumpulkan jadi satu kartu.
+                    val group = ArrayList<InfoBlock.Bullet>()
+                    while (i < msg.blocks.size && msg.blocks[i] is InfoBlock.Bullet) {
+                        group += msg.blocks[i] as InfoBlock.Bullet
+                        i++
                     }
+                    MenuGroup {
+                        group.forEachIndexed { k, b ->
+                            if (k > 0) MenuDivider()
+                            MenuRow(
+                                leading = {
+                                    Icon(bulletIcon(b.label), contentDescription = null, modifier = Modifier.size(24.dp), tint = MaterialTheme.colorScheme.primary)
+                                },
+                                label = t(b.label),
+                                description = t(b.text),
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
                 }
             }
         }
-        Spacer(Modifier.height(24.dp))
+        Text(
+            t("Dari Olyuno"),
+            style = MaterialTheme.typography.bodyMedium,
+            color = muted,
+            modifier = Modifier.padding(start = 24.dp, end = 24.dp, top = 20.dp),
+        )
     }
 }

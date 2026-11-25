@@ -203,7 +203,7 @@ internal fun rememberDictation(onText: (text: String, sendNow: Boolean) -> Unit)
 }
 
 /**
- * Tombol kotak sudut bulat (40dp) untuk kolom Tanya AI. [accent] true dan [enabled] = gradien warna primer;
+ * Tombol kotak sudut bulat (40dp) untuk kolom Olyuno AI. [accent] true dan [enabled] = gradien warna primer;
  * selain itu latar netral tipis.
  */
 @Composable

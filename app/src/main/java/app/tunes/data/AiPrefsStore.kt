@@ -6,7 +6,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 /**
- * Pilihan model untuk Tanya AI. [label] = nama tampilan di aplikasi, [defaultId] = ID model Gemini yang dipanggil
+ * Pilihan model untuk Olyuno AI. [label] = nama tampilan di aplikasi, [defaultId] = ID model Gemini yang dipanggil
  * (bisa diganti pengguna di pengaturan karena daftar model gratis Google sering berubah).
  */
 enum class AiModel(val label: String, val defaultId: String) {
@@ -16,7 +16,7 @@ enum class AiModel(val label: String, val defaultId: String) {
 }
 
 /**
- * Pengaturan Tanya AI: ID perangkat acak (untuk pembatas laju di server), model terpilih, dan ID model.
+ * Pengaturan Olyuno AI: ID perangkat acak (untuk pembatas laju di server), model terpilih, dan ID model.
  * Kunci API Gemini TIDAK ada di aplikasi: disimpan di server Olyuno dan dikelola lewat APK admin.
  * Sengaja TIDAK diekspor di cadangan (Backup.kt) dan tidak pernah dicatat di log.
  */

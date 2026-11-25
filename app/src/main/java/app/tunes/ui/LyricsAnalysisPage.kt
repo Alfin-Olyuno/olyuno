@@ -5,6 +5,31 @@ import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.animate
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.withFrameNanos
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.foundation.interaction.DragInteraction
+import androidx.compose.material.icons.rounded.Tune
+import androidx.compose.material.icons.rounded.ErrorOutline
+import androidx.compose.material.icons.rounded.Block
+import androidx.compose.material.icons.rounded.Schedule
+import androidx.compose.material.icons.rounded.CloudOff
+import kotlin.math.abs
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.input.pointer.util.VelocityTracker
+import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.awaitEachGesture
+import kotlinx.coroutines.Job
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.foundation.gestures.scrollBy
@@ -84,8 +109,10 @@ import androidx.compose.runtime.State
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.key
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -112,6 +139,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.launch
 import kotlin.math.PI
 import kotlin.math.sin
 import kotlin.math.cos
@@ -134,7 +162,7 @@ import app.tunes.i18n.t
 import app.tunes.player.PlayerState
 
 /**
- * Halaman "Tanya AI": obrolan bebas soal musik dengan AI (Gemini).
+ * Halaman "Olyuno AI": obrolan bebas soal musik dengan AI (Gemini).
  *
  * Saat dibuka halaman ini kosong: hanya panah + judul, tombol riwayat (hamburger) di kiri atas, dan kolom
  * "Tanya Olyuno" di bawah. Jawaban tampil seperti asisten AI pada umumnya (teks polos, bukan kartu).
@@ -149,6 +177,7 @@ fun LyricsAnalysisPage(
 ) {
     val chat by vm.chat.collectAsStateWithLifecycle()
     val chatBusy by vm.chatBusy.collectAsStateWithLifecycle()
+    val aiStatus by vm.aiStatus.collectAsStateWithLifecycle()
     val chatError by vm.chatError.collectAsStateWithLifecycle()
     val convoId by vm.convoId.collectAsStateWithLifecycle()
     val history by vm.bedahHistory.collectAsStateWithLifecycle()
@@ -158,7 +187,6 @@ fun LyricsAnalysisPage(
     val lastQuestion = chat.lastOrNull()?.takeIf { it.fromUser }?.text
     val searchTopics = remember(lastQuestion) { SearchTopics.detect(lastQuestion) }
 
-    var showSettings by remember { mutableStateOf(false) }
     var input by rememberSaveable { mutableStateOf("") }
     var drawerOpen by rememberSaveable { mutableStateOf(false) }
     val listState = rememberLazyListState()
@@ -169,7 +197,9 @@ fun LyricsAnalysisPage(
     // Pesan baru, titik menunggu muncul, atau galat: gulir ke bawah.
     // Selama jawaban mengalir dan setelah selesai, tidak ada lompatan ke atas pesan: yang mengikuti ujung teks ada di bawah.
     var prevBusy by remember { mutableStateOf(false) }
+    var follow by remember { mutableStateOf(true) }
     LaunchedEffect(chat.size, chatBusy, chatError) {
+        if (chat.lastOrNull()?.fromUser == true) follow = true
         val justFinished = prevBusy && !chatBusy
         prevBusy = chatBusy
         if (justFinished && chatError == null) return@LaunchedEffect
@@ -177,10 +207,19 @@ fun LyricsAnalysisPage(
         val last = listState.layoutInfo.totalItemsCount - 1
         if (last >= 0) listState.animateScrollToItem(last)
     }
-    // Jawaban mengalir: ikuti ujung teks selama pengguna tidak sedang menggulir sendiri.
-    val streamLen = chat.lastOrNull()?.takeIf { !it.fromUser }?.text?.length ?: 0
-    LaunchedEffect(streamLen) {
-        if (streamLen > 0 && chatBusy && !listState.isScrollInProgress) listState.scrollBy(100000f)
+    // Jawaban mengalir: layar mengikuti ujung teks. Begitu pengguna menggulir sendiri ke atas, berhenti mengikuti
+    // (tidak ditarik balik ke bawah); kembali mengikuti kalau mereka menggulir sampai dasar lagi atau mengirim pertanyaan baru.
+    LaunchedEffect(listState) {
+        launch {
+            listState.interactionSource.interactions.collect { i ->
+                when (i) {
+                    is DragInteraction.Start -> follow = false
+                    is DragInteraction.Stop, is DragInteraction.Cancel -> follow = !listState.canScrollForward
+                    else -> Unit
+                }
+            }
+        }
+        snapshotFlow { listState.canScrollForward }.collect { canFwd -> if (!canFwd) follow = true }
     }
 
     val send = {
@@ -201,7 +240,7 @@ fun LyricsAnalysisPage(
         }
     }
     SubPage(
-        title = t("Tanya AI"),
+        title = t("Olyuno AI"),
         vm = vm,
         player = player,
         onBack = onBack,
@@ -220,7 +259,6 @@ fun LyricsAnalysisPage(
                     ModelDropdown(
                         selected = model,
                         onSelect = { vm.aiPrefs.setModel(it) },
-                        onSettings = { showSettings = true },
                     )
                 }
                 LazyColumn(
@@ -236,6 +274,7 @@ fun LyricsAnalysisPage(
                             AiMessage(
                                 text = m.text,
                                 streaming = chatBusy && index == chat.lastIndex,
+                                onGrow = { if (follow) listState.scrollBy(100000f) },
                                 vm = vm,
                                 currentId = player.current?.videoId,
                                 isPlaying = player.isPlaying,
@@ -249,13 +288,12 @@ fun LyricsAnalysisPage(
                             )
                         }
                     }
-                    if (chatBusy && chat.lastOrNull()?.fromUser == true) item { TypingIndicator(searchTopics) }
+                    if (chatBusy && chat.lastOrNull()?.fromUser == true) item { TypingIndicator(searchTopics, aiStatus) }
                     chatError?.let { kind ->
                         item {
                             ErrorRow(
                                 kind = kind,
                                 onRetry = { vm.retryAnswer() },
-                                onSettings = { showSettings = true },
                             )
                         }
                     }
@@ -276,12 +314,13 @@ fun LyricsAnalysisPage(
                 open = drawerOpen,
                 entries = history,
                 currentId = convoId,
+                onOpen = { drawerOpen = true },
                 onClose = { drawerOpen = false },
                 onNew = {
                     drawerOpen = false
                     vm.newChat()
                 },
-                onOpen = { e ->
+                onOpenEntry = { e ->
                     drawerOpen = false
                     vm.openConversation(e)
                 },
@@ -297,40 +336,102 @@ fun LyricsAnalysisPage(
         }
     }
 
-    if (showSettings) {
-        AiSettingsDialog(vm = vm, onDismiss = { showSettings = false })
-    }
 }
 
-private fun aiErrorText(kind: AiErrorKind): String = when (kind) {
-    AiErrorKind.NoKey, AiErrorKind.BadKey -> t("Tanya AI belum tersedia saat ini")
-    AiErrorKind.ModelNotFound -> t("Model tidak ditemukan, cek ID model di pengaturan")
-    AiErrorKind.Quota -> t("Batas pemakaian gratis habis, coba lagi nanti")
-    AiErrorKind.Network -> t("Tidak ada koneksi internet")
-    AiErrorKind.Blocked -> t("AI tidak bisa membahas lagu ini")
-    AiErrorKind.Server, AiErrorKind.Parse -> t("Terjadi gangguan pada AI, coba lagi")
+/** Beberapa kalimat per jenis galat supaya tidak selalu sama; isinya sengaja umum dan tidak menyebut hal teknis. */
+private fun aiErrorVariants(kind: AiErrorKind): List<String> = when (kind) {
+    AiErrorKind.NoKey, AiErrorKind.BadKey -> listOf(
+        t("Olyuno AI belum tersedia saat ini"),
+        t("Olyuno AI sedang istirahat sebentar, coba lagi nanti"),
+        t("Fitur ini belum bisa dipakai sekarang, coba beberapa saat lagi"),
+        t("AI-nya belum siap menjawab, coba lagi nanti"),
+    )
+    AiErrorKind.ModelNotFound -> listOf(
+        t("Model AI ini sedang tidak tersedia, coba pilih model lain"),
+        t("Model yang dipilih belum bisa menjawab, ganti model di kanan atas"),
+        t("Model ini sedang tidak bisa dipakai, pilih model lain dulu"),
+    )
+    AiErrorKind.Quota -> listOf(
+        t("Batas pemakaian gratis habis, coba lagi nanti"),
+        t("Sedang ramai yang bertanya, coba lagi sebentar lagi"),
+        t("Jatah bertanya untuk saat ini sudah habis, coba lagi nanti"),
+        t("Terlalu banyak pertanyaan dalam waktu singkat, tunggu sebentar lalu coba lagi"),
+    )
+    AiErrorKind.Network -> listOf(
+        t("Tidak ada koneksi internet"),
+        t("Koneksi terputus, periksa jaringan lalu coba lagi"),
+        t("Tidak bisa terhubung, cek jaringan internet"),
+        t("Sinyal sepertinya hilang, coba lagi setelah tersambung"),
+    )
+    AiErrorKind.Blocked -> listOf(
+        t("AI tidak bisa membahas lagu ini"),
+        t("Yang satu ini tidak bisa dibahas AI, coba tanyakan hal lain"),
+        t("Pertanyaan ini belum bisa dijawab, coba dengan kata-kata lain"),
+    )
+    AiErrorKind.Server -> listOf(
+        t("Terjadi gangguan pada AI, coba lagi"),
+        t("AI-nya sedang bermasalah, coba kirim ulang"),
+        t("Ada yang tidak beres di sisi AI, coba sekali lagi"),
+    )
+    AiErrorKind.Parse -> listOf(
+        t("Jawaban AI tidak terbaca dengan baik, coba lagi"),
+        t("Jawabannya tidak sampai utuh, coba kirim ulang"),
+        t("Jawaban kali ini berantakan, coba tanyakan lagi"),
+    )
 }
 
-/** Galat jawaban AI: pesan + satu tombol yang pas (buka pengaturan atau coba lagi). */
+private var lastErrorPick = -1
+
+/** Pilih satu kalimat acak, bukan yang sama dengan pilihan sebelumnya. */
+private fun pickErrorIndex(size: Int): Int {
+    var i = kotlin.random.Random.nextInt(size)
+    if (size > 1 && i == lastErrorPick) i = (i + 1) % size
+    lastErrorPick = i
+    return i
+}
+
+private fun aiErrorIcon(kind: AiErrorKind) = when (kind) {
+    AiErrorKind.Network -> Icons.Rounded.CloudOff
+    AiErrorKind.Quota -> Icons.Rounded.Schedule
+    AiErrorKind.Blocked -> Icons.Rounded.Block
+    AiErrorKind.ModelNotFound -> Icons.Rounded.Tune
+    else -> Icons.Rounded.ErrorOutline
+}
+
+/**
+ * Galat jawaban AI: satu baris tenang selebar teks jawaban, ikon kecil + kalimat + "Coba lagi"
+ * untuk galat yang memang bisa dicoba ulang. Warna netral (bukan merah), supaya tidak terasa seperti alarm.
+ */
 @Composable
 private fun ErrorRow(
     kind: AiErrorKind,
     onRetry: () -> Unit,
-    onSettings: () -> Unit,
 ) {
-    val label: String? = when (kind) {
-        AiErrorKind.ModelNotFound -> t("Pengaturan")
-        AiErrorKind.NoKey, AiErrorKind.BadKey, AiErrorKind.Blocked -> null
-        else -> t("Coba lagi")
+    val variants = aiErrorVariants(kind)
+    val pick = rememberSaveable(kind) { pickErrorIndex(variants.size) }
+    val retryable = when (kind) {
+        AiErrorKind.NoKey, AiErrorKind.BadKey, AiErrorKind.Blocked, AiErrorKind.ModelNotFound -> false
+        else -> true
     }
-    val action: () -> Unit = when (kind) {
-        AiErrorKind.ModelNotFound -> onSettings
-        else -> onRetry
-    }
-    Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp)) {
-        Text(aiErrorText(kind), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
-        if (label != null) {
-            TextButton(onClick = action, contentPadding = PaddingValues(0.dp)) { Text(label) }
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+            .padding(start = 14.dp, end = if (retryable) 4.dp else 14.dp, top = 4.dp, bottom = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(aiErrorIcon(kind), contentDescription = null, modifier = Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        Spacer(Modifier.width(12.dp))
+        Text(
+            variants[pick % variants.size],
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.weight(1f).padding(vertical = 10.dp),
+        )
+        if (retryable) {
+            TextButton(onClick = onRetry) { Text(t("Coba lagi")) }
         }
     }
 }
@@ -370,6 +471,7 @@ private fun UserMessage(text: String) {
 private fun AiMessage(
     text: String,
     streaming: Boolean,
+    onGrow: suspend () -> Unit,
     vm: MainViewModel,
     currentId: String?,
     isPlaying: Boolean,
@@ -377,7 +479,48 @@ private fun AiMessage(
     onPlay: (SongItem) -> Unit,
     onOpenEntity: (CollectionRef) -> Unit,
 ) {
-    val parsed = remember(text, streaming) { SongRefs.parse(text, complete = !streaming) }
+    // Teks dari server datang bergumpal (beberapa kalimat sekaligus). Supaya terbaca seperti diketik, yang ditampilkan
+    // dilepas bertahap: pelan kalau tidak ada antrean, makin cepat kalau antreannya menumpuk (selalu mengejar), dan
+    // setelah aliran selesai sisanya dituntaskan cepat. Jawaban lama dari riwayat langsung tampil utuh.
+    val smooth = LocalSmoothAnim.current
+    var paced by rememberSaveable { mutableStateOf(streaming && smooth) }
+    var revealed by rememberSaveable { mutableIntStateOf(if (paced) 0 else text.length) }
+    val latestText by rememberUpdatedState(text)
+    val latestStreaming by rememberUpdatedState(streaming)
+    LaunchedEffect(paced) {
+        if (!paced) return@LaunchedEffect
+        var last = withFrameNanos { it }
+        var carry = 0f
+        while (true) {
+            val now = withFrameNanos { it }
+            val dt = ((now - last) / 1_000_000_000f).coerceAtMost(0.1f)
+            last = now
+            val target = latestText.length
+            val backlog = target - revealed
+            if (backlog > 0) {
+                val rate = if (latestStreaming) maxOf(STREAM_BASE_CPS, backlog * 3.5f) else maxOf(STREAM_BASE_CPS * 2f, backlog * 7f)
+                carry += rate * dt
+                val step = carry.toInt()
+                if (step > 0) {
+                    carry -= step
+                    var next = minOf(target, revealed + step)
+                    if (next < target && next > 0 && latestText[next - 1].isHighSurrogate()) next++
+                    revealed = next
+                }
+            } else {
+                carry = 0f
+                if (!latestStreaming) {
+                    paced = false
+                    break
+                }
+            }
+        }
+    }
+    val visible = if (paced) text.take(revealed.coerceIn(0, text.length)) else text
+    val live = streaming || paced
+    LaunchedEffect(visible.length) { if (live) onGrow() }
+
+    val parsed = remember(visible, live) { SongRefs.parse(visible, complete = !live) }
     val shown = remember(parsed, question) {
         val asked = SearchTopics.detect(question)
         val byAsked = parsed.items.filter { topicOfRef(it) in asked }
@@ -402,11 +545,71 @@ private fun AiMessage(
             SongSummary(shown, songStates, entityStates, currentId, isPlaying, onPlay, onOpenEntity)
             Spacer(Modifier.height(12.dp))
         }
-        if (parsed.text.isNotBlank()) AiMarkdown(parsed.text, streaming)
+        if (parsed.text.isNotBlank()) AiMarkdown(parsed.text, live)
     }
 }
 
 private val CARD_HEIGHT = 64.dp
+
+/** Kecepatan ketik minimum (huruf/detik) saat tidak ada antrean; antrean yang menumpuk membuatnya lebih cepat. */
+private const val STREAM_BASE_CPS = 60f
+
+/** Jumlah huruf terakhir yang masih memudar masuk. */
+private const val FADE_CHARS = 14
+
+/** Huruf-huruf paling ujung dibuat makin transparan, jadi teks baru tampak muncul pelan, bukan tiba-tiba. */
+private fun fadeTail(src: AnnotatedString, base: Color): AnnotatedString {
+    val n = minOf(FADE_CHARS, src.length)
+    if (n == 0) return src
+    return buildAnnotatedString {
+        append(src)
+        for (k in 0 until n) {
+            val i = src.length - n + k
+            addStyle(SpanStyle(color = base.copy(alpha = 1f - 0.7f * (k + 1) / n)), i, i + 1)
+        }
+    }
+}
+
+/**
+ * Teks satu blok jawaban. Saat [live] (masih mengalir): ujung teks memudar masuk dan ada titik kecil berdenyut
+ * tepat di akhir teks, seperti di Gemini / ChatGPT / Claude. Titik digambar langsung di kanvas, jadi tidak
+ * menambah huruf ke teks (aman untuk salin/blok) dan denyutnya tidak memicu penyusunan ulang.
+ */
+@Composable
+private fun StreamText(
+    text: AnnotatedString,
+    style: TextStyle,
+    color: Color,
+    live: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    if (!live) {
+        Text(text, style = style, color = color, modifier = modifier)
+        return
+    }
+    val layout = remember { arrayOfNulls<TextLayoutResult>(1) }
+    val pulse = rememberInfiniteTransition(label = "streamDot").animateFloat(
+        initialValue = 0.35f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(650, easing = LinearEasing), RepeatMode.Reverse),
+        label = "streamDotAlpha",
+    )
+    val faded = remember(text, color) { fadeTail(text, color) }
+    Text(
+        faded,
+        style = style,
+        color = color,
+        onTextLayout = { layout[0] = it },
+        modifier = modifier.drawWithContent {
+            drawContent()
+            val l = layout[0] ?: return@drawWithContent
+            val r = l.getCursorRect(text.length.coerceAtMost(l.layoutInput.text.length))
+            val radius = 3.dp.toPx()
+            val x = minOf(r.right + 8.dp.toPx(), size.width - radius)
+            drawCircle(color.copy(alpha = pulse.value), radius = radius, center = Offset(x, r.center.y))
+        },
+    )
+}
 
 private fun topicOf(kind: CollectionKind): SearchTopic = when (kind) {
     CollectionKind.ARTIST -> SearchTopic.Artist
@@ -712,7 +915,7 @@ private fun blendedLook(ms: Float, i: Int): DotLook {
  * napas, ayun), berpindah antar gaya dengan mulus. Tampil sampai potongan pertama jawaban tiba.
  */
 @Composable
-private fun TypingIndicator(topics: List<SearchTopic> = emptyList()) {
+private fun TypingIndicator(topics: List<SearchTopic> = emptyList(), status: String? = null) {
     val transition = rememberInfiniteTransition(label = "typingDots")
     val total = DOT_SEGMENT_MS * DOT_PATTERNS
     val clock = transition.animateFloat(
@@ -745,11 +948,27 @@ private fun TypingIndicator(topics: List<SearchTopic> = emptyList()) {
                     .background(color, CircleShape),
             )
         }
-        if (topics.isNotEmpty()) {
+        if (status != null) {
+            // Olyuno AI sedang menjalankan alat (cari lagu, periksa lirik, ...): tampilkan kegiatan sebenarnya.
+            Spacer(Modifier.width(2.dp))
+            ToolStatusLabel(status)
+        } else if (topics.isNotEmpty()) {
             Spacer(Modifier.width(2.dp))
             SearchingLabel(topics)
         }
     }
+}
+
+/** Teks kegiatan alat dengan kilau yang menyapu kiri ke kanan, seperti [SearchingLabel] tapi untuk satu teks bebas. */
+@Composable
+private fun ToolStatusLabel(status: String, style: TextStyle = MaterialTheme.typography.bodyMedium) {
+    val clock = rememberInfiniteTransition(label = "toolStatus").animateFloat(
+        initialValue = 0f,
+        targetValue = SWEEP_MS.toFloat(),
+        animationSpec = infiniteRepeatable(tween(SWEEP_MS, easing = LinearEasing)),
+        label = "toolStatusClock",
+    )
+    ShimmerText(t(status), progress = { clock.value / SWEEP_MS }, style = style)
 }
 
 /** Satu sapuan kilau (kiri ke kanan) = 1600 ms. */
@@ -1029,14 +1248,15 @@ private fun AiMarkdown(text: String, streaming: Boolean) {
                 // Hanya blok terakhir yang mungkin masih "setengah jadi" saat teks mengalir.
                 val live = streaming && idx == blocks.lastIndex
                 when (b) {
-                    is MdBlock.Heading -> Text(
+                    is MdBlock.Heading -> StreamText(
                         rememberInline(b.text, live),
                         style = (if (b.level <= 2) MaterialTheme.typography.titleMedium else MaterialTheme.typography.titleSmall)
                             .copy(fontWeight = FontWeight.SemiBold),
                         color = scheme.onSurface,
+                        live = live,
                         modifier = Modifier.padding(top = if (idx == 0) 0.dp else 6.dp),
                     )
-                    is MdBlock.Para -> Text(rememberInline(b.text, live), style = body, color = scheme.onSurface)
+                    is MdBlock.Para -> StreamText(rememberInline(b.text, live), body, scheme.onSurface, live)
                     is MdBlock.Bullet -> Row(Modifier.fillMaxWidth().padding(start = 4.dp + 18.dp * b.level)) {
                         Text(
                             BULLET_GLYPHS[b.level.coerceIn(0, 2)],
@@ -1044,7 +1264,7 @@ private fun AiMarkdown(text: String, streaming: Boolean) {
                             color = scheme.onSurfaceVariant,
                             modifier = Modifier.width(18.dp),
                         )
-                        Text(rememberInline(b.text, live), style = body, color = scheme.onSurface, modifier = Modifier.weight(1f))
+                        StreamText(rememberInline(b.text, live), body, scheme.onSurface, live, Modifier.weight(1f))
                     }
                     is MdBlock.Numbered -> Row(Modifier.fillMaxWidth().padding(start = 4.dp + 18.dp * b.level)) {
                         Text(
@@ -1053,7 +1273,7 @@ private fun AiMarkdown(text: String, streaming: Boolean) {
                             color = scheme.primary,
                             modifier = Modifier.width(28.dp),
                         )
-                        Text(rememberInline(b.text, live), style = body, color = scheme.onSurface, modifier = Modifier.weight(1f))
+                        StreamText(rememberInline(b.text, live), body, scheme.onSurface, live, Modifier.weight(1f))
                     }
                     is MdBlock.Quote -> Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min)) {
                         Box(
@@ -1064,10 +1284,11 @@ private fun AiMarkdown(text: String, streaming: Boolean) {
                                 .background(scheme.primary.copy(alpha = 0.45f)),
                         )
                         Spacer(Modifier.width(12.dp))
-                        Text(
+                        StreamText(
                             rememberInline(b.text, live),
                             style = body.copy(fontStyle = FontStyle.Italic),
                             color = scheme.onSurfaceVariant,
+                            live = live,
                             modifier = Modifier.weight(1f),
                         )
                     }
@@ -1202,6 +1423,13 @@ private fun AskBar(
 // ------------------------------------------------------------ panel samping
 
 private const val DAY_MS = 24L * 60 * 60 * 1000
+private val DRAWER_WIDTH = 320.dp
+
+/** Penyimpan job animasi lepas-jari panel (bukan state, tidak memicu recompose). */
+private class DrawerSettle {
+    var job: Job? = null
+    var target: Boolean? = null
+}
 
 /** Panel dari kiri: obrolan baru dan riwayat per hari. */
 @Composable
@@ -1210,38 +1438,139 @@ private fun HistoryDrawer(
     open: Boolean,
     entries: List<BedahEntry>,
     currentId: String?,
+    onOpen: () -> Unit,
     onClose: () -> Unit,
     onNew: () -> Unit,
-    onOpen: (BedahEntry) -> Unit,
+    onOpenEntry: (BedahEntry) -> Unit,
     onDelete: (String) -> Unit,
     onClearAll: () -> Unit,
 ) {
     val imeUp = rememberImeVisible()
     val smooth = LocalSmoothAnim.current
-    val scrim by animateFloatAsState(
-        targetValue = if (open) 0.45f else 0f,
-        animationSpec = if (smooth) tween<Float>(220) else snap<Float>(),
-        label = "drawerScrim",
-    )
     var confirmClear by remember { mutableStateOf(false) }
     var pendingDelete by remember { mutableStateOf<BedahEntry?>(null) }
-    if (open || scrim > 0.001f) {
+
+    // Satu sumber kebenaran: offsetPx = posisi panel (-lebar = tertutup, 0 = terbuka).
+    // Jari, tombol back, dan animasi lepas-jari semuanya menulis ke nilai yang sama,
+    // jadi tidak ada dua animasi yang saling tarik dan panel tidak bisa nyangkut di tengah.
+    val scope = rememberCoroutineScope()
+    val widthPx = with(LocalDensity.current) { DRAWER_WIDTH.toPx() }
+    var offsetPx by remember(widthPx) { mutableFloatStateOf(if (open) 0f else -widthPx) }
+    val holder = remember { DrawerSettle() }
+
+    fun settle(toOpen: Boolean, velocity: Float) {
+        holder.job?.cancel()
+        holder.target = toOpen
+        val end = if (toOpen) 0f else -widthPx
+        if (!smooth) {
+            offsetPx = end
+            holder.target = null
+            return
+        }
+        holder.job = scope.launch {
+            animate(
+                initialValue = offsetPx,
+                targetValue = end,
+                initialVelocity = velocity,
+                animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow),
+            ) { v, _ -> offsetPx = v.coerceIn(-widthPx, 0f) }
+            holder.target = null
+        }
+    }
+
+    // Perubahan dari luar (tombol menu, back, pilih riwayat, obrolan baru).
+    LaunchedEffect(open, widthPx) { if (holder.target != open) settle(open, 0f) }
+
+    val finish: (Float) -> Unit = { velocity ->
+        val toOpen = when {
+            velocity > 700f -> true
+            velocity < -700f -> false
+            else -> offsetPx > -widthPx / 2f
+        }
+        settle(toOpen, velocity)
+        if (toOpen != open) { if (toOpen) onOpen() else onClose() }
+    }
+    val finishNow by rememberUpdatedState(finish)
+
+    // Gestur geser horizontal dibaca di pass Initial: induk melihat sentuhan lebih dulu daripada
+    // isi panel (daftar riwayat, tombol, baris). Begitu geseran horizontal melewati slop, sentuhan
+    // diambil alih dan anak-anaknya dibatalkan, jadi panel bisa digeser dari bagian mana pun.
+    // Geseran vertikal dibiarkan lewat supaya daftar tetap bisa di-scroll.
+    fun Modifier.drawerDrag(): Modifier = pointerInput(widthPx) {
+        val slop = viewConfiguration.touchSlop
+        awaitEachGesture {
+            val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+            val tracker = VelocityTracker()
+            tracker.addPosition(down.uptimeMillis, down.position)
+            var sumX = 0f
+            var sumY = 0f
+            var dragging = false
+            while (true) {
+                val event = awaitPointerEvent(PointerEventPass.Initial)
+                val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                if (!change.pressed) {
+                    if (dragging) {
+                        change.consume()
+                        finishNow(tracker.calculateVelocity().x)
+                    }
+                    break
+                }
+                val d = change.positionChange()
+                tracker.addPosition(change.uptimeMillis, change.position)
+                if (!dragging) {
+                    sumX += d.x
+                    sumY += d.y
+                    if (abs(sumY) > slop && abs(sumY) > abs(sumX)) break
+                    if (abs(sumX) > slop) {
+                        dragging = true
+                        holder.job?.cancel()
+                        holder.target = null
+                        offsetPx = (offsetPx + sumX).coerceIn(-widthPx, 0f)
+                        change.consume()
+                    }
+                } else {
+                    offsetPx = (offsetPx + d.x).coerceIn(-widthPx, 0f)
+                    change.consume()
+                }
+            }
+        }
+    }
+
+    val visible by remember(widthPx) { derivedStateOf { offsetPx > -widthPx + 0.5f } }
+
+    Box(Modifier.fillMaxSize()) {
+        // Jalur tepi kiri: geser dari tepi layar untuk membuka. Tetap ada selama gestur
+        // supaya jari tidak "lepas" saat panel mulai muncul; dibatasi agar tidak menutupi
+        // tombol menu di atas dan bar input di bawah.
         Box(
             Modifier
-                .fillMaxSize()
-                .background(Color.Black.copy(alpha = scrim))
-                .clickable(
-                    indication = null,
-                    interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
-                    onClick = onClose,
-                ),
+                .align(Alignment.CenterStart)
+                .padding(top = LocalTopInset.current + 72.dp, bottom = LocalBottomInset.current + 80.dp)
+                .fillMaxHeight()
+                .width(20.dp)
+                .drawerDrag(),
         )
-    }
-    AnimatedVisibility(
-        visible = open,
-        enter = if (smooth) slideInHorizontally { -it } + fadeIn() else EnterTransition.None,
-        exit = if (smooth) slideOutHorizontally { -it } + fadeOut() else ExitTransition.None,
-    ) {
+        if (open || visible) {
+            // Penampung statis (tidak ikut bergeser) supaya posisi jari terbaca stabil;
+            // gestur di node yang ikut bergeser membuat gerakan patah-patah.
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .drawerDrag(),
+            ) {
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .drawBehind {
+                            val progress = (1f + offsetPx / widthPx).coerceIn(0f, 1f)
+                            drawRect(Color.Black.copy(alpha = 0.45f * progress))
+                        }
+                        .clickable(
+                            indication = null,
+                            interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                            onClick = onClose,
+                        ),
+                )
         val startToday = remember(open) {
             java.util.Calendar.getInstance().apply {
                 set(java.util.Calendar.HOUR_OF_DAY, 0); set(java.util.Calendar.MINUTE, 0)
@@ -1267,8 +1596,9 @@ private fun HistoryDrawer(
         Column(
             Modifier
                 .fillMaxHeight()
-                .width(320.dp)
-                .clip(RoundedCornerShape(topEnd = 28.dp, bottomEnd = 28.dp))
+                .width(DRAWER_WIDTH)
+                .graphicsLayer { translationX = offsetPx }
+                .clip(RoundedCornerShape(topEnd = 12.dp, bottomEnd = 12.dp))
                 .background(glassContainer(MaterialTheme.colorScheme.surfaceContainerHigh))
                 .padding(top = LocalTopInset.current)
                 .imePadding()
@@ -1276,7 +1606,7 @@ private fun HistoryDrawer(
         ) {
             Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    t("Riwayat Tanya AI"),
+                    t("Riwayat Olyuno AI"),
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.weight(1f),
@@ -1319,7 +1649,7 @@ private fun HistoryDrawer(
                                     .padding(horizontal = 12.dp, vertical = 1.dp)
                                     .clip(RoundedCornerShape(16.dp))
                                     .background(if (sel) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f) else Color.Transparent)
-                                    .clickable { onOpen(r) }
+                                    .clickable { onOpenEntry(r) }
                                     .padding(start = 12.dp, top = 6.dp, bottom = 6.dp, end = 2.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
@@ -1355,6 +1685,8 @@ private fun HistoryDrawer(
                 }
             }
         }
+            }
+        }
     }
     if (confirmClear) {
         ConfirmDeleteDialog(
@@ -1382,9 +1714,9 @@ private fun HistoryDrawer(
     }
 }
 
-/** Satu tombol "[nama model] >" di kanan atas; diketuk memunculkan dropdown pilihan model + pengaturan. */
+/** Satu tombol "[nama model] >" di kanan atas; diketuk memunculkan dropdown pilihan model. */
 @Composable
-private fun ModelDropdown(selected: AiModel, onSelect: (AiModel) -> Unit, onSettings: () -> Unit) {
+private fun ModelDropdown(selected: AiModel, onSelect: (AiModel) -> Unit) {
     var open by remember { mutableStateOf(false) }
     val smooth = LocalSmoothAnim.current
     val rotation by animateFloatAsState(
@@ -1422,43 +1754,4 @@ private fun ModelDropdown(selected: AiModel, onSelect: (AiModel) -> Unit, onSett
             }
         }
     }
-}
-
-/** Pengaturan lanjutan: ID model Gemini yang dipanggil. */
-@Composable
-private fun AiSettingsDialog(vm: MainViewModel, onDismiss: () -> Unit) {
-    val prefs = vm.aiPrefs
-    val ids by prefs.modelIds.collectAsStateWithLifecycle()
-    val idFields = remember { AiModel.entries.associateWith { m -> mutableStateOf(ids[m] ?: m.defaultId) } }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(t("Pengaturan Tanya AI")) },
-        text = {
-            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text(
-                    t("Tanya AI ditenagai Gemini dari Google. Judul, artis, dan lirik yang dianalisis dikirim ke Google. Di paket gratis, isi permintaan dapat dipakai Google untuk meningkatkan produknya."),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                AiModel.entries.forEach { m ->
-                    val field = idFields.getValue(m)
-                    OutlinedTextField(
-                        value = field.value,
-                        onValueChange = { field.value = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true,
-                        label = { Text(t("ID model %s", m.label)) },
-                    )
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = {
-                AiModel.entries.forEach { m -> prefs.setModelId(m, idFields.getValue(m).value) }
-                onDismiss()
-            }) { Text(t("Simpan")) }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text(t("Batal")) } },
-    )
 }

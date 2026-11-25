@@ -384,10 +384,11 @@ private suspend fun InnerTube.genreSongs(ref: CollectionRef): List<SongItem> {
 // ------------------------------------------------------ Genre cepat (mood)
 
 /**
- * Genre cepat di bawah sapaan beranda. Tiap genre memakai beberapa kata kunci (dipisah "|") yang
- * condong ke lagu yang sedang trending; hasilnya digabung selang-seling.
+ * Kumpulan genre cepat (chip di bawah sapaan beranda); yang tampil dipilih acak lewat [pickQuickGenres].
+ * Tiap genre memakai beberapa kata kunci (dipisah "|") yang condong ke lagu yang sedang trending;
+ * hasilnya digabung selang-seling.
  */
-val quickGenres: List<CollectionRef> = listOf(
+val quickGenrePool: List<CollectionRef> = listOf(
     "Feel good" to "feel good songs trending 2026|lagu semangat bahagia trending",
     "Sad" to "sad songs trending 2026|lagu galau sedih trending",
     "Romance" to "romantic love songs trending 2026|lagu romantis trending",
@@ -395,7 +396,34 @@ val quickGenres: List<CollectionRef> = listOf(
     "Focus" to "focus music trending|lagu fokus belajar santai",
     "Party" to "party songs trending 2026|lagu pesta dance trending",
     "Sleep" to "sleep music trending|lagu pengantar tidur tenang",
+    "Chill" to "chill songs trending 2026|lagu santai chill populer",
+    "Workout" to "workout gym songs trending|lagu semangat olahraga",
+    "Road trip" to "road trip songs trending|lagu perjalanan asik",
+    "Healing" to "healing calm songs|lagu healing menenangkan",
+    "Energize" to "energetic upbeat songs trending|lagu energik semangat",
+    "Late night" to "late night songs|lagu malam hari santai",
+    "Rainy day" to "rainy day songs|lagu hujan melow",
+    "Morning" to "morning songs upbeat|lagu pagi semangat",
+    "Heartbreak" to "heartbreak songs trending|lagu patah hati",
+    "Acoustic" to "acoustic chill songs|lagu akustik santai",
+    "Gaming" to "gaming music playlist|musik gaming semangat",
 ).map { (title, q) -> CollectionRef(CollectionKind.MOOD, title, query = q) }
+
+/** Jumlah chip genre cepat yang tampil sekaligus di Beranda. */
+const val QUICK_GENRE_COUNT = 8
+
+/**
+ * Pilih [QUICK_GENRE_COUNT] chip dari [quickGenrePool] dengan urutan acak. Kalau [previous] diberikan,
+ * hasilnya diusahakan berbeda dari itu (isi atau urutan) supaya muat ulang Beranda terasa berganti.
+ */
+fun pickQuickGenres(previous: List<CollectionRef> = emptyList()): List<CollectionRef> {
+    var picked = quickGenrePool.shuffled().take(QUICK_GENRE_COUNT)
+    repeat(5) {
+        if (picked.map { it.key } != previous.map { it.key }) return picked
+        picked = quickGenrePool.shuffled().take(QUICK_GENRE_COUNT)
+    }
+    return picked
+}
 
 private const val MAX_MOOD_PLAYLISTS = 12
 
@@ -551,6 +579,36 @@ private suspend fun InnerTube.resolveArtist(name: String): CollectionRef? {
     return (fromTop + r.artists)
         .filter { it.kind == CollectionKind.ARTIST }
         .firstOrNull { it.title.trim().equals(q, ignoreCase = true) }
+}
+
+/** Batas artis mirip per bagian "Mirip dengan", dan batas bawah supaya bagiannya layak tampil. */
+private const val MAX_SIMILAR_ARTISTS = 12
+private const val MIN_SIMILAR_ARTISTS = 3
+
+/**
+ * Artis yang mirip dengan [name] (rak "Fans might also like" di halaman artis YouTube Music), untuk bagian
+ * "Mirip dengan" di Beranda. Null bila halaman artisnya tidak ketemu atau artis miripnya terlalu sedikit.
+ */
+suspend fun InnerTube.similarArtists(name: String, fallbackThumb: String? = null): SimilarArtists? {
+    val artist = resolveArtist(name) ?: return null
+    val id = artist.browseId ?: return null
+    val root = browse(id)
+    // Rak album / single / playlist juga berisi kartu dua baris, tapi bukan bertipe artis, jadi tersaring di bawah.
+    val similar = root.findAll("musicTwoRowItemRenderer").mapNotNull { r ->
+        val title = r.path("title", "runs").objects().joined().trim()
+        if (title.isBlank()) return@mapNotNull null
+        val ref = entityOf(
+            r["navigationEndpoint"],
+            title,
+            r.path("subtitle", "runs").objects().joined(),
+            thumbOf(r.path("thumbnailRenderer", "musicThumbnailRenderer", "thumbnail", "thumbnails")),
+        ) ?: return@mapNotNull null
+        ref.takeIf {
+            it.kind == CollectionKind.ARTIST && it.browseId != id && !it.title.trim().equals(name.trim(), ignoreCase = true)
+        }
+    }.distinctBy { it.browseId }.take(MAX_SIMILAR_ARTISTS)
+    if (similar.size < MIN_SIMILAR_ARTISTS) return null
+    return SimilarArtists(name, artist.thumbnail ?: fallbackThumb, artist, similar)
 }
 
 private suspend fun InnerTube.querySongs(q: String): List<SongItem> = searchSongsOnly(q)

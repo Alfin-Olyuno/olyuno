@@ -106,7 +106,7 @@ fun AndaScreen(
         MenuGroup {
             MenuItem(Icons.Rounded.Mic, t("Cari lagu"), onOpenFindSong)
             MenuDivider()
-            MenuItem(Icons.Rounded.AutoAwesome, t("Tanya AI"), onOpenLyricsAnalysis)
+            MenuItem(Icons.Rounded.AutoAwesome, t("Olyuno AI"), onOpenLyricsAnalysis)
             MenuDivider()
             MenuItem(Icons.Rounded.History, t("Riwayat lagu"), onOpenHistory)
             MenuDivider()

@@ -482,7 +482,7 @@ class LyricsRepository(
     private fun request(url: okhttp3.HttpUrl): String? {
         val req = Request.Builder()
             .url(url)
-            .header("User-Agent", "Olyuno/0.0.1 (personal Android player)")
+            .header("User-Agent", "Olyuno/1.0.1 (personal Android player)")
             .build()
         http.newCall(req).execute().use { resp ->
             val c = resp.code

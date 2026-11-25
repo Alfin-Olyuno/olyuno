@@ -114,10 +114,10 @@ fun AboutPage(
             SectionTitle(t("Pembuat"))
             MenuGroup { DeveloperCard() }
 
-            SectionTitle(t("Tanya AI"))
+            SectionTitle(t("Olyuno AI"))
             MenuGroup {
                 Text(
-                    t("Tanya AI ditenagai Gemini dari Google. Judul, artis, dan lirik yang dianalisis dikirim ke Google. Di paket gratis, isi permintaan dapat dipakai Google untuk meningkatkan produknya."),
+                    t("Olyuno AI ditenagai Gemini dari Google. Pertanyaanmu, judul, artis, lirik yang dianalisis, dan hasil pencarian yang diminta Olyuno AI dikirim ke Google. Di paket gratis, isi permintaan dapat dipakai Google untuk meningkatkan produknya."),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp),

@@ -129,7 +129,7 @@ fun LyricsMenuSheet(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    t("Tanya AI"),
+                    t("Olyuno AI"),
                     color = sheetInk,
                     style = MaterialTheme.typography.bodyLarge,
                     modifier = Modifier.weight(1f),

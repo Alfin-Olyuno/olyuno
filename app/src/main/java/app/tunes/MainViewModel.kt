@@ -29,6 +29,9 @@ import app.tunes.innertube.CollectionInfo
 import app.tunes.innertube.loadCollection
 import app.tunes.innertube.quickPicks
 import app.tunes.innertube.trendingSongs
+import app.tunes.innertube.SimilarArtists
+import app.tunes.innertube.pickQuickGenres
+import app.tunes.innertube.similarArtists
 import app.tunes.innertube.searchAll
 import app.tunes.innertube.searchSuggestions
 import kotlinx.coroutines.delay
@@ -95,6 +98,9 @@ sealed interface SearchState {
 }
 
 // Cari lagu: berapa kandidat teratas yang dicocokkan ke lirik asli, dari sumber mana saja, dan batasnya.
+/** Bagian "Mirip dengan" di Beranda: maksimal tiga, dicoba dari beberapa artis acak karena tidak semua punya artis mirip. */
+private const val MAX_SIMILAR_SECTIONS = 3
+private const val SIMILAR_CANDIDATES = 5
 private const val FIND_LYRIC_CANDIDATES = 10
 private const val FIND_LYRIC_PARALLEL = 20
 private const val FIND_LYRIC_TIMEOUT_MS = 4_500L
@@ -337,12 +343,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         return edits + (a.length - i) + (b.length - j) <= 1
     }
 
-    // ------------------------------------------------ Tanya AI
-    /** Pesan obrolan Tanya AI. fromUser=false = jawaban AI. */
+    // ------------------------------------------------ Olyuno AI
+    /** Pesan obrolan Olyuno AI. fromUser=false = jawaban AI. */
     data class ChatMessage(val fromUser: Boolean, val text: String)
 
     val aiPrefs get() = container.aiPrefs
-    /** Riwayat percakapan Tanya AI (terbaru di atas). */
+    /** Riwayat percakapan Olyuno AI (terbaru di atas). */
     val bedahHistory: StateFlow<List<app.tunes.data.BedahEntry>> get() = container.bedahHistory.entries
 
     /** Hasil pencarian lagu yang disebut AI di jawabannya (kunci = [app.tunes.ai.SongRef.key]). */
@@ -418,6 +424,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val _chat = MutableStateFlow<List<ChatMessage>>(emptyList())
     val chat: StateFlow<List<ChatMessage>> = _chat.asStateFlow()
     private val _chatBusy = MutableStateFlow(false)
+    /** Kegiatan alat Olyuno AI yang sedang berjalan ("Mencari lagu", ...); null = tidak ada. */
+    private val _aiStatus = MutableStateFlow<String?>(null)
+    val aiStatus: StateFlow<String?> = _aiStatus.asStateFlow()
     val chatBusy: StateFlow<Boolean> = _chatBusy.asStateFlow()
     private val _chatError = MutableStateFlow<app.tunes.ai.AiErrorKind?>(null)
     val chatError: StateFlow<app.tunes.ai.AiErrorKind?> = _chatError.asStateFlow()
@@ -488,6 +497,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 val reply = container.lyricsAnalyzer.chatStream(
                     aiPrefs.deviceId, aiPrefs.idOf(model), history, q, answerLang(),
+                    tools = container.aiTools,
+                    onStatus = { if (gen == answerGen) _aiStatus.value = it },
+                    onReset = { if (isActive) dropPartial() },
                 ) { partial ->
                     if (!isActive) return@chatStream // dibatalkan (obrolan diganti): jangan tulis ke obrolan lain
                     val cur = _chat.value
@@ -515,7 +527,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 dropPartial()
                 _chatError.value = app.tunes.ai.AiErrorKind.Server
             } finally {
-                if (gen == answerGen) _chatBusy.value = false
+                if (gen == answerGen) { _chatBusy.value = false; _aiStatus.value = null }
             }
         }
     }
@@ -529,6 +541,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         answerGen++
         chatJob?.cancel()
         _chatBusy.value = false
+        _aiStatus.value = null
         saveConversation()
     }
 
@@ -549,6 +562,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _convoId.value = null
         _chat.value = emptyList()
         _chatBusy.value = false
+        _aiStatus.value = null
         _chatError.value = null
     }
 
@@ -558,6 +572,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _convoId.value = e.videoId
         _chat.value = e.chat.map { ChatMessage(it.first, it.second) }
         _chatBusy.value = false
+        _aiStatus.value = null
         _chatError.value = null
     }
 
@@ -652,11 +667,65 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    // ------------------------------------------------- Genre cepat (chip)
+    private val _moods = MutableStateFlow(pickQuickGenres())
+
+    /** Chip genre cepat di bawah sapaan: dipilih acak dari kumpulan yang lebih besar, diacak lagi saat Beranda dimuat ulang. */
+    val moods: StateFlow<List<CollectionRef>> = _moods.asStateFlow()
+
+    fun shuffleMoods() {
+        _moods.value = pickQuickGenres(previous = _moods.value)
+    }
+
+    // ------------------------------------------------------ Mirip dengan
+    private val _similar = MutableStateFlow<List<SimilarArtists>?>(null)
+
+    /** null = belum dimuat; kosong = tidak ada (belum ada riwayat putar / gagal). Maks. [MAX_SIMILAR_SECTIONS] bagian, berurutan. */
+    val similar: StateFlow<List<SimilarArtists>?> = _similar.asStateFlow()
+
+    private var similarJob: Job? = null
+
+    /**
+     * Pilih beberapa artis acak dari yang paling sering diputar, lalu ambil artis yang mirip dengannya.
+     * Saat dimuat ulang, bagian lama tetap tampil sampai yang baru siap.
+     */
+    fun loadSimilar(force: Boolean = false) {
+        if (!force && _similar.value != null) return
+        similarJob?.cancel()
+        similarJob = viewModelScope.launch {
+            _similar.value = try {
+                val candidates = repo.plays(0L).first().toStats(12).artists
+                    .filter { it.name.isNotBlank() }
+                    .shuffled()
+                    .take(SIMILAR_CANDIDATES)
+                coroutineScope {
+                    candidates.map { a ->
+                        async {
+                            try {
+                                innerTube.similarArtists(a.name, a.thumbnail)
+                            } catch (e: CancellationException) {
+                                throw e
+                            } catch (e: Exception) {
+                                null
+                            }
+                        }
+                    }.awaitAll()
+                }.filterNotNull().take(MAX_SIMILAR_SECTIONS)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                emptyList()
+            }
+        }
+    }
+
     /** Tombol muat ulang di Beranda: semua bagian dimuat ulang (genre ikut diacak). */
     fun refreshHome() {
         loadQuickPicks(force = true)
         loadTrending(force = true)
         loadGenres(force = true)
+        shuffleMoods()
+        loadSimilar(force = true)
         loadMixPlaylists()
         refreshStreak()
         refreshRecent()
@@ -1640,6 +1709,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         loadQuickPicks()
         loadTrending()
         loadGenres()
+        loadSimilar()
         autoSyncNow()
         container.downloadNotifier
         container.downloads.resumePending()

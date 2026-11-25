@@ -44,7 +44,6 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.Alignment
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.tunes.innertube.CollectionRef
-import app.tunes.innertube.quickGenres
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -108,6 +107,8 @@ fun HomeScreen(
     val greeting = greetingFor(now)
     val quickPicks by vm.quickPicks.collectAsStateWithLifecycle()
     val genres by vm.genres.collectAsStateWithLifecycle()
+    val moods by vm.moods.collectAsStateWithLifecycle()
+    val similar by vm.similar.collectAsStateWithLifecycle()
     val trending by vm.trending.collectAsStateWithLifecycle()
     val recent by vm.recent.collectAsStateWithLifecycle()
     val topArtists by vm.topArtists.collectAsStateWithLifecycle()
@@ -147,7 +148,7 @@ fun HomeScreen(
                 contentPadding = PaddingValues(horizontal = 16.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                items(quickGenres, key = { it.key }) { g ->
+                items(moods, key = { it.key }) { g ->
                     MoodChip(g, onClick = { vm.openCollection(g) })
                 }
             }
@@ -293,6 +294,29 @@ fun HomeScreen(
             }
         }
 
+        // ---- Mirip dengan [artis]: sampai 3 bagian berurutan. Tiap bagian = label kecil "Mirip dengan", nama artis
+        // yang sering kamu dengar di bawahnya (ketuk = buka halaman artis), lalu artis-artis yang mirip berjejer ke kanan.
+        // Disembunyikan sepenuhnya kalau belum ada riwayat putar / belum ada hasil.
+        similar?.forEachIndexed { idx, sim ->
+            item(key = "sim_header_$idx") {
+                MixHeader(
+                    account = AccountInfo(name = sim.artist, photoUrl = sim.artistThumbnail),
+                    label = t("Mirip dengan"),
+                    onClick = { vm.openCollection(sim.artistRef) },
+                )
+            }
+            item(key = "sim_row_$idx") {
+                LazyRow(
+                    contentPadding = PaddingValues(horizontal = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    items(sim.similar, key = { "sim_${idx}_" + it.key }) { ref ->
+                        SimilarArtistCard(ref, onClick = { vm.openCollection(ref) })
+                    }
+                }
+            }
+        }
+
         // ---- Sedang trending: kartu lagu yang bisa digeser ke kanan, tepat di bawah "Paling sering diputar".
         item(key = "trending_header") { HomeSectionTitle(t("Sedang trending")) }
         item(key = "trending_row") {
@@ -383,9 +407,12 @@ private val MixLineHeight = LineHeightStyle(
     trim = LineHeightStyle.Trim.None,
 )
 
-/** Header "Mix untukmu": foto akun (atau huruf pertama), label kecil, nama akun tebal, panah di kanan. */
+/**
+ * Header bergaya "Mix untukmu": foto (atau huruf pertama), label kecil ([label]), nama tebal di bawahnya, panah di kanan.
+ * Dipakai juga oleh "Mirip dengan [artis]".
+ */
 @Composable
-private fun MixHeader(account: AccountInfo, onClick: () -> Unit) {
+private fun MixHeader(account: AccountInfo, onClick: () -> Unit, label: String = t("Mix untukmu")) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -409,7 +436,7 @@ private fun MixHeader(account: AccountInfo, onClick: () -> Unit) {
         }
         Column(Modifier.weight(1f).padding(start = 12.dp)) {
             Text(
-                text = t("Mix untukmu"),
+                text = label,
                 style = MaterialTheme.typography.labelMedium.copy(lineHeight = 24.sp, lineHeightStyle = MixLineHeight),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -545,6 +572,45 @@ private fun AnchorArtistCard(artist: StatArtist, onClick: () -> Unit) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.fillMaxWidth(),
         )
+    }
+}
+
+/** Satu artis mirip di "Mirip dengan": avatar bulat + nama (dan keterangan dari YouTube Music kalau ada). */
+@Composable
+private fun SimilarArtistCard(ref: CollectionRef, onClick: () -> Unit) {
+    Column(
+        modifier = Modifier
+            .width(112.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .clickable(onClick = onClick)
+            .padding(start = 8.dp, top = 6.dp, end = 8.dp, bottom = 10.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Artwork(
+            url = ref.thumbnail,
+            modifier = Modifier.fillMaxWidth().aspectRatio(1f),
+            shape = CircleShape,
+        )
+        Spacer(Modifier.height(8.dp))
+        Text(
+            text = ref.title,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,
+            style = MaterialTheme.typography.labelLarge,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        ref.subtitle?.let { sub ->
+            Text(
+                text = sub,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
     }
 }
 

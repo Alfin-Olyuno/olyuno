@@ -106,7 +106,7 @@ fun OlyunoRoot(
     // libraryPage 4 = daftar Playlist saya, 5 = isi satu playlist (id-nya di sini).
     var localPlaylistId by rememberSaveable { mutableLongStateOf(-1L) }
     val localPlaylists by vm.localPlaylists.collectAsStateWithLifecycle()
-    // Halaman penuh dari tab Anda: -1 tidak ada, 0 Ekualiser, 1 Riwayat lagu, 2 Informasi, 3 Pengaturan, 4 Tampilan, 11 Statistik & Rekap (satu halaman), 14 Streak, 15 Cari lagu (suara), 16 Tanya AI.
+    // Halaman penuh dari tab Anda: -1 tidak ada, 0 Ekualiser, 1 Riwayat lagu, 2 Informasi, 3 Pengaturan, 4 Tampilan, 11 Statistik & Rekap (satu halaman), 14 Streak, 15 Cari lagu (suara), 16 Olyuno AI.
     var andaPage by rememberSaveable { mutableIntStateOf(-1) }
     // Halaman Tentang Olyuno (andaPage == 12) bisa dibuka dari tab Anda atau Pengaturan; ini halaman tujuan saat kembali (-1 atau 3).
     var aboutBackTo by rememberSaveable { mutableIntStateOf(-1) }
@@ -126,7 +126,7 @@ fun OlyunoRoot(
         playerSheet.rangePx = with(density) { screenH.dp.toPx() }
     }
     LaunchedEffect(showPlayer) { playerSheet.animateTo(showPlayer) }
-    // Permintaan "Tanya AI" dari menu lirik di layar pemutar: tutup pemutar, buka halamannya, mulai analisis.
+    // Permintaan "Olyuno AI" dari menu lirik di layar pemutar: tutup pemutar, buka halamannya, mulai analisis.
     val analysisRequest by vm.lyricsAnalysisRequest.collectAsStateWithLifecycle()
     LaunchedEffect(analysisRequest) {
         analysisRequest?.let { song ->

@@ -1,6 +1,6 @@
 package app.tunes.ai
 
-/** Hal yang sedang "dicari" Tanya AI; dipakai untuk teks indikator di samping titik menunggu jawaban. */
+/** Hal yang sedang "dicari" Olyuno AI; dipakai untuk teks indikator di samping titik menunggu jawaban. */
 enum class SearchTopic { Song, Playlist, Artist, Album }
 
 /**
