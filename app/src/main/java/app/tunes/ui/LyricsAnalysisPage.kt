@@ -56,13 +56,16 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.Send
+import androidx.compose.material.icons.rounded.ArrowUpward
+import androidx.compose.material.icons.rounded.Mic
+import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Menu
 import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material.icons.rounded.VisibilityOff
@@ -192,6 +195,16 @@ fun LyricsAnalysisPage(
             input = ""
         }
     }
+    // Dikte suara: hasilnya masuk ke kolom input, atau langsung dikirim kalau pengguna menekan tombol kirim.
+    val dictation = rememberDictation { text, sendNow ->
+        val merged = (input.trimEnd() + " " + text).trim()
+        if (sendNow && !chatBusy) {
+            vm.sendMessage(merged)
+            input = ""
+        } else {
+            input = merged
+        }
+    }
     // Setelah kunci disimpan, ulangi pertanyaan yang tadi gagal karena kunci.
     val onKeySaved = {
         val e = vm.chatError.value
@@ -236,6 +249,8 @@ fun LyricsAnalysisPage(
                                 streaming = chatBusy && index == chat.lastIndex,
                                 vm = vm,
                                 currentId = player.current?.videoId,
+                                isPlaying = player.isPlaying,
+                                question = chat.getOrNull(index - 1)?.takeIf { it.fromUser }?.text,
                                 onPlay = { song ->
                                     // Lagu yang sudah diputar tidak dimulai ulang; langsung buka pemutar.
                                     if (player.current?.videoId != song.videoId) vm.playSong(song)
@@ -262,6 +277,8 @@ fun LyricsAnalysisPage(
                     onValueChange = { input = it },
                     busy = chatBusy,
                     onSend = send,
+                    onStop = { vm.stopAnswer() },
+                    dictation = dictation,
                     // Keyboard terbuka: rapat ke keyboard. Tertutup: di atas bar navigasi / pemutar mini.
                     modifier = Modifier.padding(top = 8.dp, bottom = if (imeUp) 8.dp else LocalBottomInset.current + 8.dp),
                 )
@@ -362,7 +379,9 @@ private fun UserMessage(text: String) {
 
 /**
  * Jawaban AI: teks polos selebar halaman (tanpa gelembung / kartu), format markdown ringan.
- * Kalau AI membahas lagu (blok [[LAGU]] di akhir jawaban), di atas teks muncul "Ringkasan >" beserta kartu lagunya.
+ * Kalau AI membahas sesuatu (blok [[LAGU]] / [[ARTIS]] / [[ALBUM]] / [[PLAYLIST]] di akhir jawaban), di atas teks muncul
+ * "Ringkasan >" yang tertutup; dibuka baru kartunya tampil. Yang ditampilkan hanya jenis yang disebut pengguna di pertanyaannya
+ * (mis. "makna lagu ..." = kartu lagu saja); kalau pertanyaannya tidak menyebut jenis, jenis yang paling dulu dibahas AI.
  */
 @Composable
 private fun AiMessage(
@@ -370,15 +389,25 @@ private fun AiMessage(
     streaming: Boolean,
     vm: MainViewModel,
     currentId: String?,
+    isPlaying: Boolean,
+    question: String?,
     onPlay: (SongItem) -> Unit,
     onOpenEntity: (CollectionRef) -> Unit,
 ) {
     val parsed = remember(text, streaming) { SongRefs.parse(text, complete = !streaming) }
+    val shown = remember(parsed, question) {
+        val asked = SearchTopics.detect(question)
+        val byAsked = parsed.items.filter { topicOfRef(it) in asked }
+        when {
+            byAsked.isNotEmpty() -> byAsked
+            else -> parsed.items.firstOrNull()?.let { first -> parsed.items.filter { topicOfRef(it) == topicOfRef(first) } }.orEmpty()
+        }
+    }
     val songStates by vm.aiSongs.collectAsStateWithLifecycle()
     val entityStates by vm.aiEntities.collectAsStateWithLifecycle()
     // Cari lagu / artis / album / playlist-nya begitu daftarnya utuh (blok sudah ditutup atau jawaban selesai).
-    LaunchedEffect(parsed.items) {
-        parsed.items.forEach { r ->
+    LaunchedEffect(shown) {
+        shown.forEach { r ->
             when (r) {
                 is AiRef.Song -> vm.resolveAiSong(r.ref)
                 is AiRef.Entity -> vm.resolveAiEntity(r.ref)
@@ -386,8 +415,8 @@ private fun AiMessage(
         }
     }
     Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp)) {
-        if (parsed.items.isNotEmpty()) {
-            SongSummary(parsed.items, songStates, entityStates, currentId, onPlay, onOpenEntity)
+        if (shown.isNotEmpty()) {
+            SongSummary(shown, songStates, entityStates, currentId, isPlaying, onPlay, onOpenEntity)
             Spacer(Modifier.height(12.dp))
         }
         if (parsed.text.isNotBlank()) AiMarkdown(parsed.text, streaming)
@@ -395,13 +424,17 @@ private fun AiMessage(
 }
 
 private val CARD_HEIGHT = 64.dp
-private val DECK_PEEK = 10.dp
 
 private fun topicOf(kind: CollectionKind): SearchTopic = when (kind) {
     CollectionKind.ARTIST -> SearchTopic.Artist
     CollectionKind.ALBUM -> SearchTopic.Album
     CollectionKind.PLAYLIST -> SearchTopic.Playlist
     else -> SearchTopic.Song
+}
+
+private fun topicOfRef(r: AiRef): SearchTopic = when (r) {
+    is AiRef.Song -> SearchTopic.Song
+    is AiRef.Entity -> topicOf(r.ref.kind)
 }
 
 private fun kindLabel(kind: CollectionKind): String = when (kind) {
@@ -411,9 +444,8 @@ private fun kindLabel(kind: CollectionKind): String = when (kind) {
 }
 
 /**
- * "Ringkasan >" + kartu lagu / artis / album / playlist yang dibahas AI (urut seperti ditulis AI). Satu item: satu kartu.
- * Beberapa item: awalnya kartu bertumpuk (yang depan terlihat penuh, yang di belakang mengintip); diketuk (atau ketuk
- * "Ringkasan") membentang jadi daftar. Ketuk kartu lagu = putar dan buka pemutar; ketuk kartu artis / album / playlist = buka halamannya.
+ * "Ringkasan >" (tertutup = hanya judul ini, tanpa kartu). Diketuk membentang jadi kartu lagu / artis / album / playlist
+ * yang dibahas AI (urut seperti ditulis AI). Ketuk kartu lagu = putar dan buka pemutar; ketuk kartu artis / album / playlist = buka halamannya.
  */
 @Composable
 private fun SongSummary(
@@ -421,13 +453,12 @@ private fun SongSummary(
     songStates: Map<String, MainViewModel.AiSongState>,
     entityStates: Map<String, MainViewModel.AiEntityState>,
     currentId: String?,
+    isPlaying: Boolean,
     onPlay: (SongItem) -> Unit,
     onOpenEntity: (CollectionRef) -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
     val smooth = LocalSmoothAnim.current
-    val multi = refs.size > 1
-    val onlySongs = refs.all { it is AiRef.Song }
     val rotation by animateFloatAsState(
         targetValue = if (expanded) 90f else 0f,
         animationSpec = if (smooth) tween<Float>(180) else snap<Float>(),
@@ -452,81 +483,49 @@ private fun SongSummary(
             Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(12.dp))
-                .then(if (multi) Modifier.clickable { expanded = !expanded } else Modifier)
+                .clickable { expanded = !expanded }
                 .padding(vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(t("Ringkasan"), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-            if (multi) {
-                Icon(
-                    Icons.AutoMirrored.Rounded.KeyboardArrowRight,
-                    contentDescription = null,
-                    modifier = Modifier.size(20.dp).graphicsLayer { rotationZ = rotation },
-                )
-            }
+            Icon(
+                Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+                contentDescription = null,
+                modifier = Modifier.size(20.dp).graphicsLayer { rotationZ = rotation },
+            )
             if (loadingTopics.isNotEmpty()) {
                 Spacer(Modifier.width(10.dp))
                 key(loadingTopics) { SearchingLabel(loadingTopics, MaterialTheme.typography.labelMedium) }
             }
-            if (multi) {
+            if (refs.size > 1) {
                 Spacer(Modifier.weight(1f))
                 Text(
-                    if (onlySongs) t("%d lagu", refs.size) else t("%d hasil", refs.size),
+                    if (refs.all { it is AiRef.Song }) t("%d lagu", refs.size) else t("%d hasil", refs.size),
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }
-        Spacer(Modifier.height(6.dp))
-        if (!multi || expanded) {
+        if (expanded) {
+            Spacer(Modifier.height(6.dp))
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 refs.forEach { r ->
-                    RefCard(r, songStates, entityStates, currentId, Modifier.fillMaxWidth(), true, onPlay, onOpenEntity)
-                }
-            }
-        } else {
-            val shown = refs.take(3)
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .height(CARD_HEIGHT + DECK_PEEK * (shown.size - 1))
-                    .clickable { expanded = true },
-            ) {
-                // Dari yang paling belakang ke depan, supaya kartu depan menutupi yang di belakangnya.
-                for (i in shown.indices.reversed()) {
-                    RefCard(
-                        r = shown[i],
-                        songStates = songStates,
-                        entityStates = entityStates,
-                        currentId = currentId,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .offset(y = DECK_PEEK * i)
-                            .graphicsLayer {
-                                val sc = 1f - 0.04f * i
-                                scaleX = sc
-                                scaleY = sc
-                                transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0.5f, 0f)
-                            },
-                        interactive = false,
-                        onPlay = onPlay,
-                        onOpenEntity = onOpenEntity,
-                    )
+                    RefCard(r, songStates, entityStates, currentId, isPlaying, Modifier.fillMaxWidth(), onPlay, onOpenEntity)
                 }
             }
         }
     }
 }
 
-/** Memilih kartu yang pas. [interactive] false = kartu hanya hiasan (bagian dari tumpukan). */
+/** Memilih kartu yang pas untuk satu rujukan. */
 @Composable
 private fun RefCard(
     r: AiRef,
     songStates: Map<String, MainViewModel.AiSongState>,
     entityStates: Map<String, MainViewModel.AiEntityState>,
     currentId: String?,
+    isPlaying: Boolean,
     modifier: Modifier,
-    interactive: Boolean,
     onPlay: (SongItem) -> Unit,
     onOpenEntity: (CollectionRef) -> Unit,
 ) {
@@ -534,22 +533,23 @@ private fun RefCard(
         is AiRef.Song -> {
             val st = songStates[r.ref.key]
             val song = (st as? MainViewModel.AiSongState.Found)?.song
-            SongCard(r.ref, st, currentId, modifier, song?.takeIf { interactive }?.let { s -> { onPlay(s) } })
+            SongCard(r.ref, st, currentId, isPlaying, modifier, song?.let { s -> { onPlay(s) } })
         }
         is AiRef.Entity -> {
             val st = entityStates[r.ref.key]
             val found = (st as? MainViewModel.AiEntityState.Found)?.ref
-            EntityCard(r.ref, st, modifier, found?.takeIf { interactive }?.let { f -> { onOpenEntity(f) } })
+            EntityCard(r.ref, st, modifier, found?.let { f -> { onOpenEntity(f) } })
         }
     }
 }
 
-/** Satu kartu lagu: sampul, judul, artis, ikon putar. [onClick] null = kartu hanya hiasan (bagian dari tumpukan). */
+/** Satu kartu lagu: sampul, judul, artis, ikon putar. [onClick] null = belum / tidak ketemu. */
 @Composable
 private fun SongCard(
     ref: SongRef,
     state: MainViewModel.AiSongState?,
     currentId: String?,
+    isPlaying: Boolean,
     modifier: Modifier,
     onClick: (() -> Unit)?,
 ) {
@@ -590,9 +590,11 @@ private fun SongCard(
             )
         }
         if (song != null) {
+            // Lagu ini sedang diputar: ikonnya jadi jeda; dijeda atau lagu lain yang diputar: kembali ke putar.
+            val nowPlaying = isPlaying && song.videoId == currentId
             Icon(
-                Icons.Rounded.PlayArrow,
-                contentDescription = t("Putar"),
+                if (nowPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                contentDescription = if (nowPlaying) t("Jeda") else t("Putar"),
                 tint = if (song.videoId == currentId) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(end = 6.dp).size(24.dp),
             )
@@ -602,7 +604,7 @@ private fun SongCard(
 
 /**
  * Kartu artis (sampul bulat), album, atau playlist. Setelah ketemu di YouTube Music, yang tampil adalah judul aslinya;
- * ketuk = buka halaman aslinya. [onClick] null = hiasan, atau belum / tidak ketemu.
+ * ketuk = buka halaman aslinya. [onClick] null = belum / tidak ketemu.
  */
 @Composable
 private fun EntityCard(
@@ -1138,56 +1140,80 @@ private fun AiMarkdown(text: String, streaming: Boolean) {
 
 // ------------------------------------------------------------ kolom input
 
-/** Kolom input tetap di bawah halaman, placeholder "Tanya Olyuno". */
+/** Kolom input tetap di bawah halaman, placeholder "Tanya Olyuno". Mikrofon (dikte suara) di kiri tombol kirim / stop. */
 @Composable
 private fun AskBar(
     value: String,
     onValueChange: (String) -> Unit,
     busy: Boolean,
     onSend: () -> Unit,
+    onStop: () -> Unit,
+    dictation: DictationState,
     modifier: Modifier = Modifier,
 ) {
     val canSend = !busy && value.isNotBlank()
+    // Saat AI memproses / mengalirkan jawaban, tombol berubah jadi stop (selalu aktif).
+    val active = busy || canSend
     val shape = RoundedCornerShape(28.dp)
+    val focus = androidx.compose.ui.platform.LocalFocusManager.current
     Row(
         modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp)
             // Hanya garis tipis di tepi, tanpa latar pengisi.
             .border(1.dp, MaterialTheme.colorScheme.outlineVariant, shape)
-            .padding(start = 20.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
+            .padding(start = 6.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(Modifier.weight(1f).padding(vertical = 8.dp), contentAlignment = Alignment.CenterStart) {
-            if (value.isEmpty()) {
-                Text(t("Tanya Olyuno"), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        androidx.compose.animation.Crossfade(
+            targetState = dictation.listening,
+            animationSpec = tween(150),
+            label = "askBarMode",
+            modifier = Modifier.weight(1f),
+        ) { voice ->
+            if (voice) {
+                // Mode dikte: batal, gelombang suara, selesai, kirim (kirim disembunyikan selama AI masih menjawab).
+                VoiceRow(dictation, canSend = !busy)
+            } else {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.weight(1f).padding(start = 14.dp, top = 8.dp, bottom = 8.dp), contentAlignment = Alignment.CenterStart) {
+                        if (value.isEmpty()) {
+                            Text(t("Tanya Olyuno"), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        BasicTextField(
+                            value = value,
+                            onValueChange = onValueChange,
+                            modifier = Modifier.fillMaxWidth(),
+                            maxLines = 5,
+                            textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
+                            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                            keyboardActions = KeyboardActions(onSend = { onSend() }),
+                        )
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    if (dictation.available) {
+                        SquircleButton(
+                            Icons.Rounded.Mic,
+                            t("Bicara"),
+                            onClick = {
+                                focus.clearFocus()
+                                dictation.start()
+                            },
+                            accent = false,
+                        )
+                        Spacer(Modifier.width(6.dp))
+                    }
+                    SquircleButton(
+                        icon = if (busy) Icons.Rounded.Stop else Icons.Rounded.ArrowUpward,
+                        description = if (busy) t("Berhenti") else t("Kirim"),
+                        onClick = if (busy) onStop else onSend,
+                        accent = true,
+                        enabled = active,
+                        iconSize = if (busy) 22 else 24,
+                    )
+                }
             }
-            BasicTextField(
-                value = value,
-                onValueChange = onValueChange,
-                modifier = Modifier.fillMaxWidth(),
-                maxLines = 5,
-                textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
-                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                keyboardActions = KeyboardActions(onSend = { onSend() }),
-            )
-        }
-        Spacer(Modifier.width(8.dp))
-        Box(
-            Modifier
-                .size(40.dp)
-                .clip(CircleShape)
-                .background(if (canSend) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
-                .clickable(enabled = canSend, onClick = onSend),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(
-                Icons.AutoMirrored.Rounded.Send,
-                contentDescription = t("Kirim"),
-                modifier = Modifier.size(20.dp),
-                tint = if (canSend) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-            )
         }
     }
 }

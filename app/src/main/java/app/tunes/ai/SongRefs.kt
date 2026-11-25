@@ -51,6 +51,15 @@ object SongRefs {
     private val OPENERS = listOf("[[LAGU]]", "[[ARTIS]]", "[[ALBUM]]", "[[PLAYLIST]]")
     private val OPEN_RE = Regex("\\[\\[(LAGU|ARTIS|ALBUM|PLAYLIST)\\]\\]")
 
+    /** Baris label yang kadang ikut ditulis AI sebelum blok ("Lagu:", "**Artis:**"); bukan bagian jawaban. */
+    private val LABEL_LINE = Regex("(?i)^[\\s*_#>-]*(lagu|artis|album|playlist)[\\s*_]*:?[\\s*_]*$")
+
+    private fun stripTrailingLabels(text: String): String {
+        var lines = text.trimEnd().lines()
+        while (lines.isNotEmpty() && LABEL_LINE.matches(lines.last())) lines = lines.dropLast(1)
+        return lines.joinToString("\n").trimEnd()
+    }
+
     /** [complete] = jawaban sudah selesai. Kalau belum, baris terakhir blok yang belum ditutup dianggap belum utuh dan dilewati. */
     fun parse(raw: String, complete: Boolean): ParsedReply {
         val idx = OPENERS.map { raw.indexOf(it) }.filter { it >= 0 }.minOrNull()
@@ -64,9 +73,9 @@ object SongRefs {
                     }
                 }
             }
-            return ParsedReply(raw.dropLast(drop).trimEnd(), emptyList())
+            return ParsedReply(stripTrailingLabels(raw.dropLast(drop)), emptyList())
         }
-        val text = raw.substring(0, idx).trimEnd()
+        val text = stripTrailingLabels(raw.substring(0, idx))
         val items = ArrayList<AiRef>()
         var pos: Int = idx
         while (pos < raw.length) {
@@ -95,7 +104,7 @@ object SongRefs {
 
     private fun parseLine(tag: String, line: String): AiRef? {
         val l = line.trim().trimStart('-', '*', '•').trim()
-        if (l.isEmpty() || l.startsWith("[[")) return null
+        if (l.isEmpty() || l.startsWith("[[") || LABEL_LINE.matches(l)) return null
         val bar = l.indexOf('|')
         val first = (if (bar >= 0) l.substring(0, bar) else l).trim().trim('"', '“', '”')
         val second = if (bar >= 0) l.substring(bar + 1).trim() else ""

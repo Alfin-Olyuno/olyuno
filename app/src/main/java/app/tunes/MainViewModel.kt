@@ -65,6 +65,8 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import app.tunes.i18n.t
 import app.tunes.i18n.userMessage
@@ -91,6 +93,17 @@ sealed interface SearchState {
     data class Error(val message: String) : SearchState
     data class Results(val results: SearchResults) : SearchState
 }
+
+// Cari lagu: berapa kandidat teratas yang dicocokkan ke lirik asli, dari sumber mana saja, dan batasnya.
+private const val FIND_LYRIC_CANDIDATES = 10
+private const val FIND_LYRIC_PARALLEL = 20
+private const val FIND_LYRIC_TIMEOUT_MS = 4_500L
+private val FIND_LYRIC_SOURCES = listOf(
+    LyricsSource.Lrclib,
+    LyricsSource.LyricsPlus,
+    LyricsSource.BetterLyrics,
+    LyricsSource.BiniLyrics,
+)
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class MainViewModel(app: Application) : AndroidViewModel(app) {
@@ -255,23 +268,35 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
         val ordered = base.entries.sortedByDescending { it.value }.map { it.key }
 
-        // 2) Cocokkan dengan lirik asli kandidat teratas (hanya LRCLIB: cepat, satu layanan).
-        val top = ordered.take(6)
+        // 2) Cocokkan dengan lirik asli 10 kandidat teratas, dari semua sumber lirik sekaligus (LRCLIB, Lyrics Plus,
+        //    Better Lyrics, BiniLyrics). Nilai tertinggi dari sumber mana pun dipakai, jadi lagu yang liriknya
+        //    cuma ada di satu sumber tetap terdeteksi. Semaphore membatasi permintaan jaringan yang berjalan bersamaan.
+        val top = ordered.take(FIND_LYRIC_CANDIDATES)
+        val gate = Semaphore(FIND_LYRIC_PARALLEL)
         val sims = top.map { id ->
-            async {
-                id to withTimeoutOrNull(4_000) { lyricSimilarity(heards, byId[id]!!) }
-            }
+            async { id to bestLyricSimilarity(heards, byId[id]!!, gate) }
         }.awaitAll().toMap()
         val scored = top.sortedByDescending { id ->
             val sim = sims[id]
             0.4 * (base[id] ?: 0.0) + (if (sim != null) 0.6 * sim else 0.2)
         }
-        (scored + ordered.drop(6)).map { byId[it]!! }
+        (scored + ordered.drop(FIND_LYRIC_CANDIDATES)).map { byId[it]!! }
+    }
+
+    /** Kemiripan tertinggi dengan lirik [song] di antara semua sumber lirik; null kalau tak satu pun punya liriknya. */
+    private suspend fun bestLyricSimilarity(heards: List<String>, song: SongItem, gate: Semaphore): Double? = coroutineScope {
+        FIND_LYRIC_SOURCES.map { source ->
+            async {
+                gate.withPermit {
+                    withTimeoutOrNull(FIND_LYRIC_TIMEOUT_MS) { lyricSimilarity(heards, song, source) }
+                }
+            }
+        }.awaitAll().filterNotNull().maxOrNull()
     }
 
     /** Seberapa mirip teks yang terdengar dengan lirik lagu (0..1), atau null kalau lirik tidak ada. */
-    private suspend fun lyricSimilarity(heards: List<String>, song: SongItem): Double? {
-        val state = container.lyrics.load(song, LyricsSource.Lrclib)
+    private suspend fun lyricSimilarity(heards: List<String>, song: SongItem, source: LyricsSource): Double? {
+        val state = container.lyrics.load(song, source)
         val ready = state as? LyricsState.Ready ?: return null
         val lyricTokens = tokenize(ready.lines.joinToString(" ") { it.text })
         if (lyricTokens.isEmpty()) return null
@@ -400,6 +425,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val _convoId = MutableStateFlow<String?>(null)
     val convoId: StateFlow<String?> = _convoId.asStateFlow()
     private var chatJob: Job? = null
+    /** Penanda jawaban terbaru: job lama yang dibatalkan tidak boleh mematikan status sibuk jawaban yang lebih baru. */
+    private var answerGen = 0
 
     /** Permintaan dari luar halaman (menu lirik di layar pemutar): OlyunoRoot membuka halaman, lalu lagunya ditanyakan. */
     private val _lyricsAnalysisRequest = MutableStateFlow<SongItem?>(null)
@@ -446,6 +473,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _chatError.value = null
         _chatBusy.value = true
         chatJob?.cancel()
+        val gen = ++answerGen
         chatJob = viewModelScope.launch {
             // Jawaban dialirkan: pesan AI dibuat saat potongan pertama tiba, lalu teksnya diperbarui terus.
             // Sebelum itu (menunggu), UI menampilkan titik animasi.
@@ -487,9 +515,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 dropPartial()
                 _chatError.value = app.tunes.ai.AiErrorKind.Server
             } finally {
-                _chatBusy.value = false
+                if (gen == answerGen) _chatBusy.value = false
             }
         }
+    }
+
+    /**
+     * Hentikan jawaban yang sedang diproses / dialirkan (tombol stop). Teks yang sudah tampil dipertahankan dan
+     * disimpan; kalau belum ada potongan jawaban sama sekali, pertanyaan tetap ada dan bisa dikirim ulang.
+     */
+    fun stopAnswer() {
+        if (!_chatBusy.value) return
+        answerGen++
+        chatJob?.cancel()
+        _chatBusy.value = false
+        saveConversation()
     }
 
     private fun saveConversation() {

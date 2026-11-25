@@ -410,12 +410,12 @@ private fun MixHeader(account: AccountInfo, onClick: () -> Unit) {
         Column(Modifier.weight(1f).padding(start = 12.dp)) {
             Text(
                 text = t("Mix untukmu"),
-                style = MaterialTheme.typography.labelMedium.copy(lineHeight = 20.sp, lineHeightStyle = MixLineHeight),
+                style = MaterialTheme.typography.labelMedium.copy(lineHeight = 24.sp, lineHeightStyle = MixLineHeight),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Text(
                 text = account.name,
-                style = MaterialTheme.typography.titleLarge.copy(lineHeightStyle = MixLineHeight),
+                style = MaterialTheme.typography.titleLarge.copy(lineHeight = 34.sp, lineHeightStyle = MixLineHeight),
                 fontWeight = FontWeight.Bold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -429,21 +429,23 @@ private fun MixHeader(account: AccountInfo, onClick: () -> Unit) {
 private fun MixCardText(title: String, subtitle: String) {
     Text(
         text = title,
-        style = MaterialTheme.typography.titleSmall.copy(lineHeight = 22.sp, lineHeightStyle = MixLineHeight),
+        style = MaterialTheme.typography.titleSmall.copy(lineHeight = 26.sp, lineHeightStyle = MixLineHeight),
         fontWeight = FontWeight.SemiBold,
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
-        modifier = Modifier.padding(top = 8.dp),
+        modifier = Modifier.padding(start = 4.dp, end = 4.dp, top = 6.dp),
     )
     // lineHeight dilonggarkan: bawaan labelMedium (16sp) terlalu rapat untuk font aplikasi, sehingga bagian atas
     // huruf besar / "p" terpotong saat teks dipangkas (maxLines + ellipsis memotong ke batas barisnya).
     Text(
         text = subtitle,
-        style = MaterialTheme.typography.labelMedium.copy(lineHeight = 20.sp, lineHeightStyle = MixLineHeight),
+        style = MaterialTheme.typography.labelMedium.copy(lineHeight = 24.sp, lineHeightStyle = MixLineHeight),
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
-        modifier = Modifier.padding(top = 2.dp),
+        // Padding bawah + samping: kartu dipotong sudut membulat 16dp (untuk ripple), tanpa ini huruf paling kiri
+        // di baris terbawah ikut terpotong sudut itu.
+        modifier = Modifier.padding(start = 4.dp, end = 4.dp, top = 0.dp, bottom = 10.dp),
     )
 }
 
