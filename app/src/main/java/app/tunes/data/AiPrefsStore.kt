@@ -16,14 +16,20 @@ enum class AiModel(val label: String, val defaultId: String) {
 }
 
 /**
- * Pengaturan Tanya AI: kunci API Gemini milik pengguna, model terpilih, dan ID model.
+ * Pengaturan Tanya AI: ID perangkat acak (untuk pembatas laju di server), model terpilih, dan ID model.
+ * Kunci API Gemini TIDAK ada di aplikasi: disimpan di server Olyuno dan dikelola lewat APK admin.
  * Sengaja TIDAK diekspor di cadangan (Backup.kt) dan tidak pernah dicatat di log.
  */
 class AiPrefsStore(context: Context) {
     private val prefs = context.getSharedPreferences("ai_prefs", Context.MODE_PRIVATE)
 
-    private val _apiKey = MutableStateFlow(prefs.getString(KEY, "") ?: "")
-    val apiKey: StateFlow<String> = _apiKey.asStateFlow()
+    /** ID acak per pemasangan; hanya dipakai server untuk membatasi laju, tidak terkait identitas pengguna. */
+    val deviceId: String = (prefs.getString(DEVICE, null)?.takeIf { it.length in 16..64 } ?: newDeviceId().also {
+        prefs.edit().putString(DEVICE, it).apply()
+    }).also {
+        // Bersihkan sisa kunci API dari versi lama (kalau ada).
+        if (prefs.contains(KEY)) prefs.edit().remove(KEY).apply()
+    }
 
     private val _model = MutableStateFlow(
         runCatching { AiModel.valueOf(prefs.getString(MODEL, null) ?: "") }.getOrDefault(AiModel.Olyuno38),
@@ -34,12 +40,6 @@ class AiPrefsStore(context: Context) {
     val modelIds: StateFlow<Map<AiModel, String>> = _modelIds.asStateFlow()
 
     fun idOf(model: AiModel): String = _modelIds.value[model] ?: model.defaultId
-
-    fun setApiKey(key: String) {
-        val k = key.trim()
-        prefs.edit().putString(KEY, k).apply()
-        _apiKey.value = k
-    }
 
     fun setModel(model: AiModel) {
         prefs.edit().putString(MODEL, model.name).apply()
@@ -54,6 +54,8 @@ class AiPrefsStore(context: Context) {
 
     private companion object {
         const val KEY = "gemini_key"
+        const val DEVICE = "device_id"
+        fun newDeviceId(): String = java.util.UUID.randomUUID().toString().replace("-", "")
         const val MODEL = "model"
         const val ID_PREFIX = "model_id_"
     }

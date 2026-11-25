@@ -459,7 +459,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         answer()
     }
 
-    /** Ulangi jawaban untuk pertanyaan terakhir yang gagal (mis. setelah kunci API diisi). */
+    /** Ulangi jawaban untuk pertanyaan terakhir yang gagal. */
     fun retryAnswer() {
         if (_chatBusy.value || _chat.value.lastOrNull()?.fromUser != true) return
         answer()
@@ -487,7 +487,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
             try {
                 val reply = container.lyricsAnalyzer.chatStream(
-                    aiPrefs.apiKey.value, aiPrefs.idOf(model), history, q, answerLang(),
+                    aiPrefs.deviceId, aiPrefs.idOf(model), history, q, answerLang(),
                 ) { partial ->
                     if (!isActive) return@chatStream // dibatalkan (obrolan diganti): jangan tulis ke obrolan lain
                     val cur = _chat.value

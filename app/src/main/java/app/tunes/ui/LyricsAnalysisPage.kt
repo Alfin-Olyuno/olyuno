@@ -67,8 +67,6 @@ import androidx.compose.material.icons.rounded.Menu
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
-import androidx.compose.material.icons.rounded.Visibility
-import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -101,7 +99,6 @@ import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
@@ -112,8 +109,6 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.input.PasswordVisualTransformation
-import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
@@ -139,11 +134,11 @@ import app.tunes.i18n.t
 import app.tunes.player.PlayerState
 
 /**
- * Halaman "Tanya AI": obrolan bebas soal musik dengan AI (Gemini lewat kunci API milik pengguna).
+ * Halaman "Tanya AI": obrolan bebas soal musik dengan AI (Gemini).
  *
  * Saat dibuka halaman ini kosong: hanya panah + judul, tombol riwayat (hamburger) di kiri atas, dan kolom
  * "Tanya Olyuno" di bawah. Jawaban tampil seperti asisten AI pada umumnya (teks polos, bukan kartu).
- * Riwayat, pilihan model, dan kunci API Gemini ada di panel samping.
+ * Riwayat ada di panel samping, pilihan model di kanan atas.
  */
 @Composable
 fun LyricsAnalysisPage(
@@ -205,12 +200,6 @@ fun LyricsAnalysisPage(
             input = merged
         }
     }
-    // Setelah kunci disimpan, ulangi pertanyaan yang tadi gagal karena kunci.
-    val onKeySaved = {
-        val e = vm.chatError.value
-        if (e == AiErrorKind.NoKey || e == AiErrorKind.BadKey) vm.retryAnswer()
-    }
-
     SubPage(
         title = t("Tanya AI"),
         vm = vm,
@@ -222,7 +211,7 @@ fun LyricsAnalysisPage(
     ) {
         Box(Modifier.fillMaxSize()) {
             Column(Modifier.fillMaxSize().padding(top = LocalTopInset.current).imePadding()) {
-                // Baris tetap di bawah panah kembali: hamburger (riwayat, kunci API) di kiri, tombol model di kanan.
+                // Baris tetap di bawah panah kembali: hamburger (riwayat) di kiri, tombol model di kanan.
                 Row(Modifier.fillMaxWidth().padding(start = 4.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                     IconButton(onClick = { drawerOpen = true }) {
                         Icon(Icons.Rounded.Menu, contentDescription = t("Riwayat chat"))
@@ -266,7 +255,6 @@ fun LyricsAnalysisPage(
                             ErrorRow(
                                 kind = kind,
                                 onRetry = { vm.retryAnswer() },
-                                onSetKey = { drawerOpen = true },
                                 onSettings = { showSettings = true },
                             )
                         }
@@ -305,7 +293,6 @@ fun LyricsAnalysisPage(
                     vm.newChat()
                     vm.clearBedahHistory()
                 },
-                onKeySaved = onKeySaved,
             )
         }
     }
@@ -316,8 +303,7 @@ fun LyricsAnalysisPage(
 }
 
 private fun aiErrorText(kind: AiErrorKind): String = when (kind) {
-    AiErrorKind.NoKey -> t("Kunci API belum diisi")
-    AiErrorKind.BadKey -> t("Kunci API tidak valid atau tidak punya izin")
+    AiErrorKind.NoKey, AiErrorKind.BadKey -> t("Tanya AI belum tersedia saat ini")
     AiErrorKind.ModelNotFound -> t("Model tidak ditemukan, cek ID model di pengaturan")
     AiErrorKind.Quota -> t("Batas pemakaian gratis habis, coba lagi nanti")
     AiErrorKind.Network -> t("Tidak ada koneksi internet")
@@ -325,22 +311,19 @@ private fun aiErrorText(kind: AiErrorKind): String = when (kind) {
     AiErrorKind.Server, AiErrorKind.Parse -> t("Terjadi gangguan pada AI, coba lagi")
 }
 
-/** Galat jawaban AI: pesan + satu tombol yang pas (atur kunci, buka pengaturan, atau coba lagi). */
+/** Galat jawaban AI: pesan + satu tombol yang pas (buka pengaturan atau coba lagi). */
 @Composable
 private fun ErrorRow(
     kind: AiErrorKind,
     onRetry: () -> Unit,
-    onSetKey: () -> Unit,
     onSettings: () -> Unit,
 ) {
     val label: String? = when (kind) {
-        AiErrorKind.NoKey, AiErrorKind.BadKey -> t("Atur kunci API")
         AiErrorKind.ModelNotFound -> t("Pengaturan")
-        AiErrorKind.Blocked -> null
+        AiErrorKind.NoKey, AiErrorKind.BadKey, AiErrorKind.Blocked -> null
         else -> t("Coba lagi")
     }
     val action: () -> Unit = when (kind) {
-        AiErrorKind.NoKey, AiErrorKind.BadKey -> onSetKey
         AiErrorKind.ModelNotFound -> onSettings
         else -> onRetry
     }
@@ -1154,14 +1137,12 @@ private fun AskBar(
     val canSend = !busy && value.isNotBlank()
     // Saat AI memproses / mengalirkan jawaban, tombol berubah jadi stop (selalu aktif).
     val active = busy || canSend
-    val shape = RoundedCornerShape(28.dp)
     val focus = androidx.compose.ui.platform.LocalFocusManager.current
     Row(
         modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp)
-            // Hanya garis tipis di tepi, tanpa latar pengisi.
-            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, shape)
+            // Tanpa kotak/garis pembungkus: placeholder, mikrofon, dan kirim/stop langsung di atas latar halaman.
             .padding(start = 6.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -1222,7 +1203,7 @@ private fun AskBar(
 
 private const val DAY_MS = 24L * 60 * 60 * 1000
 
-/** Panel dari kiri: obrolan baru, riwayat per hari, pilihan model, dan isian kunci API Gemini. */
+/** Panel dari kiri: obrolan baru dan riwayat per hari. */
 @Composable
 private fun HistoryDrawer(
     vm: MainViewModel,
@@ -1234,7 +1215,6 @@ private fun HistoryDrawer(
     onOpen: (BedahEntry) -> Unit,
     onDelete: (String) -> Unit,
     onClearAll: () -> Unit,
-    onKeySaved: () -> Unit,
 ) {
     val imeUp = rememberImeVisible()
     val smooth = LocalSmoothAnim.current
@@ -1374,12 +1354,6 @@ private fun HistoryDrawer(
                     }
                 }
             }
-            HorizontalDivider(
-                modifier = Modifier.padding(horizontal = 16.dp),
-                thickness = 1.dp,
-                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f),
-            )
-            ApiKeySection(vm = vm, onSaved = onKeySaved)
         }
     }
     if (confirmClear) {
@@ -1450,68 +1424,7 @@ private fun ModelDropdown(selected: AiModel, onSelect: (AiModel) -> Unit, onSett
     }
 }
 
-/** Isian kunci API Gemini di dasar panel samping: status tersimpan, tempel / tampilkan, simpan, hapus. */
-@Composable
-private fun ApiKeySection(vm: MainViewModel, onSaved: () -> Unit) {
-    val prefs = vm.aiPrefs
-    val saved by prefs.apiKey.collectAsStateWithLifecycle()
-    var key by remember(saved) { mutableStateOf(saved) }
-    var show by remember { mutableStateOf(false) }
-    val uriHandler = LocalUriHandler.current
-    val save = {
-        val k = key.trim()
-        if (k.isNotEmpty() && k != saved) {
-            prefs.setApiKey(k)
-            onSaved()
-        }
-    }
-    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(t("Kunci API Gemini"), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-            Text(
-                if (saved.isNotEmpty()) t("Tersimpan") else t("Belum diisi"),
-                style = MaterialTheme.typography.labelMedium,
-                color = if (saved.isNotEmpty()) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        OutlinedTextField(
-            value = key,
-            onValueChange = { key = it },
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true,
-            shape = RoundedCornerShape(16.dp),
-            placeholder = { Text(t("Tempel kunci API di sini")) },
-            visualTransformation = if (show) VisualTransformation.None else PasswordVisualTransformation(),
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-            keyboardActions = KeyboardActions(onDone = { save() }),
-            trailingIcon = {
-                IconButton(onClick = { show = !show }) {
-                    Icon(if (show) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility, contentDescription = null)
-                }
-            },
-        )
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Button(onClick = { save() }, enabled = key.isNotBlank() && key.trim() != saved) { Text(t("Simpan")) }
-            if (saved.isNotEmpty()) {
-                Spacer(Modifier.width(4.dp))
-                TextButton(onClick = {
-                    prefs.setApiKey("")
-                    key = ""
-                }) { Text(t("Hapus kunci"), color = MaterialTheme.colorScheme.error) }
-            }
-        }
-        Text(
-            t("Kunci hanya disimpan di perangkat ini."),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        TextButton(onClick = { uriHandler.openUri("https://aistudio.google.com/apikey") }, contentPadding = PaddingValues(0.dp)) {
-            Text(t("Cara mendapat kunci"))
-        }
-    }
-}
-
-/** Pengaturan lanjutan: ID model Gemini yang dipanggil (kunci API diisi di panel samping). */
+/** Pengaturan lanjutan: ID model Gemini yang dipanggil. */
 @Composable
 private fun AiSettingsDialog(vm: MainViewModel, onDismiss: () -> Unit) {
     val prefs = vm.aiPrefs

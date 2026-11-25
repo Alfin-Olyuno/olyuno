@@ -78,7 +78,7 @@ class LyricsAnalyzer(cacheDir: File) {
 
     /** Analisis satu lagu. [lyrics] boleh null (lirik tidak ditemukan): AI diminta lebih hati-hati. */
     suspend fun analyze(
-        apiKey: String,
+        deviceId: String,
         modelId: String,
         videoId: String,
         title: String,
@@ -87,7 +87,7 @@ class LyricsAnalyzer(cacheDir: File) {
         lang: String,
         useCache: Boolean = true,
     ): LyricsAnalysis = withContext(Dispatchers.IO) {
-        if (apiKey.isBlank()) throw AiException(AiErrorKind.NoKey)
+        if (deviceId.isBlank()) throw AiException(AiErrorKind.NoKey)
         if (useCache) cached(videoId, lang, modelId)?.let { return@withContext it }
 
         val prompt = buildString {
@@ -114,7 +114,7 @@ class LyricsAnalyzer(cacheDir: File) {
         var last: AiException? = null
         repeat(2) { attempt ->
             try {
-                val text = call(apiKey, modelId, body)
+                val text = call(deviceId, modelId, body)
                 val analysis = LyricsAnalysis.fromJson(JSONObject(stripFences(text)))
                 runCatching { cacheFile(videoId, lang, modelId).writeText(analysis.toJson().toString()) }
                 return@withContext analysis
@@ -138,7 +138,7 @@ class LyricsAnalyzer(cacheDir: File) {
      * Konteks yang dikirim ringkas (judul, artis, ringkasan, tema) supaya hemat token.
      */
     suspend fun ask(
-        apiKey: String,
+        deviceId: String,
         modelId: String,
         title: String,
         artist: String,
@@ -147,7 +147,7 @@ class LyricsAnalyzer(cacheDir: File) {
         question: String,
         lang: String,
     ): String = withContext(Dispatchers.IO) {
-        if (apiKey.isBlank()) throw AiException(AiErrorKind.NoKey)
+        if (deviceId.isBlank()) throw AiException(AiErrorKind.NoKey)
         val context = "Kita sedang membahas lagu \"$title\" oleh $artist. Ringkasan makna yang sudah kamu berikan: " +
             analysis.summary + " Tema: " + analysis.themes.joinToString(", ") + ". Bahasa jawaban: $lang."
         val contents = JSONArray().put(textContent("user", context)).put(textContent("model", "Baik, silakan bertanya."))
@@ -160,9 +160,9 @@ class LyricsAnalyzer(cacheDir: File) {
             .put("contents", contents)
             .put("generationConfig", JSONObject().put("temperature", 0.7))
         try {
-            call(apiKey, modelId, body).trim()
+            call(deviceId, modelId, body).trim()
         } catch (e: AiException) {
-            if (e.kind in RETRYABLE) call(apiKey, modelId, body).trim() else throw e
+            if (e.kind in RETRYABLE) call(deviceId, modelId, body).trim() else throw e
         }
     }
 
@@ -171,13 +171,13 @@ class LyricsAnalyzer(cacheDir: File) {
      * sebelum [question]; jawaban berupa teks biasa dengan format markdown ringan.
      */
     suspend fun chat(
-        apiKey: String,
+        deviceId: String,
         modelId: String,
         history: List<Pair<Boolean, String>>,
         question: String,
         lang: String,
     ): String = withContext(Dispatchers.IO) {
-        if (apiKey.isBlank()) throw AiException(AiErrorKind.NoKey)
+        if (deviceId.isBlank()) throw AiException(AiErrorKind.NoKey)
         val contents = JSONArray()
         history.takeLast(MAX_CHAT_TURNS).forEach { (fromUser, text) ->
             contents.put(textContent(if (fromUser) "user" else "model", text.take(3000)))
@@ -188,9 +188,9 @@ class LyricsAnalyzer(cacheDir: File) {
             .put("contents", contents)
             .put("generationConfig", JSONObject().put("temperature", 0.7))
         try {
-            call(apiKey, modelId, body).trim()
+            call(deviceId, modelId, body).trim()
         } catch (e: AiException) {
-            if (e.kind in RETRYABLE) call(apiKey, modelId, body).trim() else throw e
+            if (e.kind in RETRYABLE) call(deviceId, modelId, body).trim() else throw e
         }
     }
 
@@ -200,14 +200,14 @@ class LyricsAnalyzer(cacheDir: File) {
      * Gangguan sementara dicoba ulang sekali, hanya kalau belum ada teks yang sempat diterima.
      */
     suspend fun chatStream(
-        apiKey: String,
+        deviceId: String,
         modelId: String,
         history: List<Pair<Boolean, String>>,
         question: String,
         lang: String,
         onText: (String) -> Unit,
     ): String = withContext(Dispatchers.IO) {
-        if (apiKey.isBlank()) throw AiException(AiErrorKind.NoKey)
+        if (deviceId.isBlank()) throw AiException(AiErrorKind.NoKey)
         val contents = JSONArray()
         history.takeLast(MAX_CHAT_TURNS).forEach { (fromUser, text) ->
             contents.put(textContent(if (fromUser) "user" else "model", text.take(3000)))
@@ -219,18 +219,18 @@ class LyricsAnalyzer(cacheDir: File) {
             .put("generationConfig", JSONObject().put("temperature", 0.7))
         var received = false
         try {
-            stream(apiKey, modelId, body) { received = true; onText(it) }
+            stream(deviceId, modelId, body) { received = true; onText(it) }
         } catch (e: AiException) {
-            if (!received && e.kind in RETRYABLE) stream(apiKey, modelId, body) { onText(it) } else throw e
+            if (!received && e.kind in RETRYABLE) stream(deviceId, modelId, body) { onText(it) } else throw e
         }
     }
 
     /** Satu permintaan streaming (SSE). Membaca baris "data: {json}" satu per satu. */
     @OptIn(InternalCoroutinesApi::class)
-    private suspend fun stream(apiKey: String, modelId: String, body: JSONObject, onText: (String) -> Unit): String {
+    private suspend fun stream(deviceId: String, modelId: String, body: JSONObject, onText: (String) -> Unit): String {
         val req = Request.Builder()
-            .url("https://generativelanguage.googleapis.com/v1beta/models/${modelId.trim()}:streamGenerateContent?alt=sse")
-            .header("x-goog-api-key", apiKey)
+            .url("$AI_BASE/${modelId.trim()}:streamGenerateContent?alt=sse")
+            .header("x-device-id", deviceId)
             .post(body.toString().toRequestBody("application/json".toMediaType()))
             .build()
         val call = client.newCall(req)
@@ -243,8 +243,9 @@ class LyricsAnalyzer(cacheDir: File) {
             call.execute().use { resp ->
                 if (!resp.isSuccessful) {
                     val raw = resp.body?.string().orEmpty()
-                    val msg = runCatching { JSONObject(raw).optJSONObject("error")?.optString("message") }.getOrNull().orEmpty()
-                    throw httpError(resp.code, msg)
+                    val err = runCatching { JSONObject(raw).optJSONObject("error") }.getOrNull()
+                    val msg = err?.optString("message").orEmpty()
+                    throw httpError(resp.code, msg, err?.optString("status").orEmpty())
                 }
                 val source = resp.body?.source() ?: throw AiException(AiErrorKind.Parse)
                 while (true) {
@@ -283,7 +284,9 @@ class LyricsAnalyzer(cacheDir: File) {
         return acc.toString().trim()
     }
 
-    private fun httpError(code: Int, msg: String): AiException = when {
+    private fun httpError(code: Int, msg: String, status: String = ""): AiException = when {
+        // Status dari proxy Olyuno: Tanya AI dimatikan admin / belum ada kunci aktif.
+        status == "AI_DISABLED" || status == "NO_KEY" -> AiException(AiErrorKind.NoKey, msg)
         code == 404 -> AiException(AiErrorKind.ModelNotFound, msg)
         code == 429 -> AiException(AiErrorKind.Quota, msg)
         code == 401 || code == 403 -> AiException(AiErrorKind.BadKey, msg)
@@ -292,18 +295,19 @@ class LyricsAnalyzer(cacheDir: File) {
         else -> AiException(AiErrorKind.Server, msg)
     }
 
-    private fun call(apiKey: String, modelId: String, body: JSONObject): String {
+    private fun call(deviceId: String, modelId: String, body: JSONObject): String {
         val req = Request.Builder()
-            .url("https://generativelanguage.googleapis.com/v1beta/models/${modelId.trim()}:generateContent")
-            .header("x-goog-api-key", apiKey)
+            .url("$AI_BASE/${modelId.trim()}:generateContent")
+            .header("x-device-id", deviceId)
             .post(body.toString().toRequestBody("application/json".toMediaType()))
             .build()
         try {
             client.newCall(req).execute().use { resp ->
                 val raw = resp.body?.string().orEmpty()
                 if (!resp.isSuccessful) {
-                    val msg = runCatching { JSONObject(raw).optJSONObject("error")?.optString("message") }.getOrNull().orEmpty()
-                    throw httpError(resp.code, msg)
+                    val err = runCatching { JSONObject(raw).optJSONObject("error") }.getOrNull()
+                    val msg = err?.optString("message").orEmpty()
+                    throw httpError(resp.code, msg, err?.optString("status").orEmpty())
                 }
                 val json = JSONObject(raw)
                 if (json.optJSONObject("promptFeedback")?.optString("blockReason").orEmpty().isNotEmpty()) {
@@ -332,6 +336,8 @@ class LyricsAnalyzer(cacheDir: File) {
         s.trim().removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
 
     private companion object {
+        /** Proxy Gemini di server Olyuno: kunci API disimpan di server, tidak pernah dikirim ke aplikasi. */
+        const val AI_BASE = "https://wiglnpjlzawejqohqqlk.supabase.co/functions/v1/ai-proxy/v1beta/models"
         const val MAX_LYRICS = 6000
         const val MAX_TURNS = 8
         const val MAX_CHAT_TURNS = 20
