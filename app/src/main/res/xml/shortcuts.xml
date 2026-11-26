@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Urutan di sini = urutan terbalik di launcher (yang pertama paling dekat ikon). -->
+    <shortcut
+        android:shortcutId="play_liked"
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_play"
+        android:shortcutShortLabel="@string/shortcut_play_liked"
+        android:shortcutLongLabel="@string/shortcut_play_liked_long">
+        <intent
+            android:action="app.tunes.action.PLAY_LIKED"
+            android:targetPackage="com.oyluno.app"
+            android:targetClass="app.tunes.MainActivity" />
+    </shortcut>
+    <shortcut
+        android:shortcutId="shuffle_liked"
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_shuffle"
+        android:shortcutShortLabel="@string/shortcut_shuffle_liked"
+        android:shortcutLongLabel="@string/shortcut_shuffle_liked_long">
+        <intent
+            android:action="app.tunes.action.SHUFFLE_LIKED"
+            android:targetPackage="com.oyluno.app"
+            android:targetClass="app.tunes.MainActivity" />
+    </shortcut>
+    <shortcut
+        android:shortcutId="search"
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_search"
+        android:shortcutShortLabel="@string/shortcut_search"
+        android:shortcutLongLabel="@string/shortcut_search_long">
+        <intent
+            android:action="app.tunes.action.SEARCH"
+            android:targetPackage="com.oyluno.app"
+            android:targetClass="app.tunes.MainActivity" />
+    </shortcut>
+</shortcuts>

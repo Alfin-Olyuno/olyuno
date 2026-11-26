@@ -1,0 +1,46 @@
+name: Build APK
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      # Opsional: isi secret OLYUNO_KEYSTORE_BASE64 (keystore dalam base64), OLYUNO_KEYSTORE_PASSWORD,
+      # OLYUNO_KEY_ALIAS, OLYUNO_KEY_PASSWORD. Tanpa itu APK memakai debug key sementara.
+      - name: Siapkan keystore release
+        env:
+          KEYSTORE_B64: ${{ secrets.OLYUNO_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/olyuno-release.jks"
+            echo "OLYUNO_KEYSTORE_PATH=$RUNNER_TEMP/olyuno-release.jks" >> "$GITHUB_ENV"
+          else
+            echo "::warning::Secret OLYUNO_KEYSTORE_BASE64 kosong: APK ditandatangani debug key sementara (tidak bisa jadi update dari build lain)."
+          fi
+
+      - name: Build APK
+        env:
+          OLYUNO_KEYSTORE_PASSWORD: ${{ secrets.OLYUNO_KEYSTORE_PASSWORD }}
+          OLYUNO_KEY_ALIAS: ${{ secrets.OLYUNO_KEY_ALIAS }}
+          OLYUNO_KEY_PASSWORD: ${{ secrets.OLYUNO_KEY_PASSWORD }}
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Olyuno-apk
+          path: app/build/outputs/apk/**/*.apk
