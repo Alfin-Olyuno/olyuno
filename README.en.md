@@ -8,11 +8,13 @@
 
 ![Android](https://img.shields.io/badge/Android-8.0%2B-3DDC84?logo=android&logoColor=white)
 ![Kotlin](https://img.shields.io/badge/Kotlin-Jetpack%20Compose-7F52FF?logo=kotlin&logoColor=white)
-![Version](https://img.shields.io/badge/version-1.0.2-2E4A8A)
+![Made in Indonesia](https://img.shields.io/badge/Made%20in-Indonesia%20%F0%9F%87%AE%F0%9F%87%A9-D52B1E)
 
 </div>
 
 ---
+
+Olyuno is made by an Indonesian developer 🇮🇩, with Indonesian as its primary interface language.
 
 ## Features
 
@@ -67,7 +69,6 @@ Release builds read the keystore from environment variables or GitHub Secrets (s
 | --- | --- |
 | `app/src/main/java/app/tunes/ui` | Jetpack Compose screens and components |
 | `.../player` | Playback (Media3), Dynamic Island, equalizer, notifications |
-| `.../innertube` | YouTube Music client |
 | `.../lyrics` | Lyrics providers and matching |
 | `.../ai` | Olyuno AI: chat, tools (function calling), lyrics analysis |
 | `.../data` | Local storage (Room), Information, statistics |
