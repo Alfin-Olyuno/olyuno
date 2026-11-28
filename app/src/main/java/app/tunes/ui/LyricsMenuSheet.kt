@@ -31,7 +31,6 @@ import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Search
-import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -134,7 +133,7 @@ fun LyricsMenuSheet(
                     style = MaterialTheme.typography.bodyLarge,
                     modifier = Modifier.weight(1f),
                 )
-                Icon(Icons.Rounded.AutoAwesome, contentDescription = null, tint = sheetInk, modifier = Modifier.size(24.dp))
+                Icon(OlyunoAiIcon, contentDescription = null, tint = sheetInk, modifier = Modifier.size(24.dp))
             }
             val shareSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
             Row(

@@ -52,9 +52,13 @@ object AnnouncementNotifier {
         mgr.createNotificationChannel(NotificationChannel(CHANNEL, t("Pengumuman"), NotificationManager.IMPORTANCE_HIGH))
     }
 
-    /** Satu notifikasi per pengumuman (maksimal 3 sekaligus); ketuk membuka halaman Informasi. */
-    fun post(context: Context, messages: List<InfoMessage>) {
-        if (!NotificationManagerCompat.from(context).areNotificationsEnabled()) return
+    /**
+     * Satu notifikasi per pengumuman (maksimal 3 sekaligus); ketuk membuka halaman Informasi. Mengembalikan id pengumuman
+     * yang benar-benar berhasil ditampilkan; sisanya (terpotong batas 3 atau gagal) dibiarkan belum ditandai supaya
+     * dicoba lagi pada pemeriksaan berikutnya.
+     */
+    fun post(context: Context, messages: List<InfoMessage>): List<String> {
+        if (!NotificationManagerCompat.from(context).areNotificationsEnabled()) return emptyList()
         ensureChannel(context)
         val open = PendingIntent.getActivity(
             context,
@@ -64,6 +68,7 @@ object AnnouncementNotifier {
                 .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_NEW_TASK),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
+        val shown = ArrayList<String>()
         for (m in messages.take(MAX_SHOWN)) {
             val text = m.shownPreview()
             val n = NotificationCompat.Builder(context, CHANNEL)
@@ -76,8 +81,9 @@ object AnnouncementNotifier {
                 .setAutoCancel(true)
                 .setContentIntent(open)
                 .build()
-            runCatching { NotificationManagerCompat.from(context).notify(m.id.hashCode(), n) }
+            if (runCatching { NotificationManagerCompat.from(context).notify(m.id.hashCode(), n) }.isSuccess) shown += m.id
         }
+        return shown
     }
 }
 
@@ -85,12 +91,15 @@ class AnnouncementWorker(context: Context, params: WorkerParameters) : Coroutine
     override suspend fun doWork(): Result {
         val app = applicationContext as? OlyunoApp ?: return Result.success()
         val container = app.container
-        container.info.refresh()
-        // Selalu ditandai sudah ditangani, supaya menyalakan saklar nanti tidak memunculkan pengumuman lama.
-        val fresh = container.info.takeUnnotified()
-        if (fresh.isNotEmpty() && container.notificationPrefs.announcements.value) {
-            AnnouncementNotifier.post(applicationContext, fresh)
+        val refreshed = container.info.refresh()
+        val on = container.notificationPrefs.announcements.value
+        // Saklar mati: semua ditandai sudah ditangani, supaya menyalakannya nanti tidak memunculkan pengumuman lama.
+        // Saklar nyala: yang baru ditandai hanya setelah notifikasinya benar-benar tampil.
+        val fresh = container.info.takeUnnotified(markFresh = !on)
+        if (on && fresh.isNotEmpty()) {
+            container.info.markNotified(AnnouncementNotifier.post(applicationContext, fresh))
         }
-        return Result.success()
+        // Jaringan gagal sesaat: coba lagi sebentar lagi, jangan menunggu 15 menit berikutnya.
+        return if (!refreshed && runAttemptCount < 3) Result.retry() else Result.success()
     }
 }

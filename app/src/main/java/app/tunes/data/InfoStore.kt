@@ -31,6 +31,8 @@ data class InfoMessage(
     val titleEn: String? = null,
     val previewEn: String? = null,
     val blocksEn: List<InfoBlock>? = null,
+    /** Waktu pengumuman dibuat di server (ms epoch). 0 = tidak diketahui (pesan bawaan / tanggal tak terbaca). */
+    val createdAtMs: Long = 0L,
 ) {
     private val en get() = I18n.effective == AppLanguage.English
     fun shownTitle(): String = if (en && !titleEn.isNullOrBlank()) titleEn else title
@@ -81,6 +83,10 @@ private fun parseBlocks(arr: JSONArray?): List<InfoBlock>? {
     return out
 }
 
+/** Waktu ISO-8601 dari Supabase (mis. 2026-11-20T10:15:30.123456+00:00) ke ms epoch; 0 kalau tidak terbaca. */
+private fun parseCreatedAt(raw: String): Long =
+    runCatching { java.time.OffsetDateTime.parse(raw).toInstant().toEpochMilli() }.getOrDefault(0L)
+
 private fun parseAnnouncements(json: String): List<InfoMessage> {
     val arr = JSONArray(json)
     val out = ArrayList<InfoMessage>()
@@ -95,6 +101,7 @@ private fun parseAnnouncements(json: String): List<InfoMessage> {
             titleEn = if (o.isNull("title_en")) null else o.optString("title_en"),
             previewEn = if (o.isNull("preview_en")) null else o.optString("preview_en"),
             blocksEn = parseBlocks(o.optJSONArray("blocks_en")),
+            createdAtMs = parseCreatedAt(o.optString("created_at")),
         )
     }
     return out
@@ -104,6 +111,12 @@ private fun parseAnnouncements(json: String): List<InfoMessage> {
 class InfoStore(context: Context) {
     private val prefs = context.getSharedPreferences("info", Context.MODE_PRIVATE)
 
+    // Waktu aplikasi ini pertama kali dipasang di HP ini (pasang ulang = waktu baru). Pengumuman dari admin panel yang
+    // dibuat SEBELUM itu tidak ditampilkan: pengguna baru hanya melihat pengumuman sejak mereka memasang aplikasi.
+    private val installedAtMs: Long = runCatching {
+        context.packageManager.getPackageInfo(context.packageName, 0).firstInstallTime
+    }.getOrDefault(0L)
+
     private val _read = MutableStateFlow(prefs.getStringSet(KEY, emptySet()).orEmpty().toSet())
     val readIds: StateFlow<Set<String>> = _read.asStateFlow()
 
@@ -112,7 +125,8 @@ class InfoStore(context: Context) {
         .readTimeout(15, TimeUnit.SECONDS)
         .build()
 
-    private fun withRemote(remote: List<InfoMessage>): List<InfoMessage> = remote + INFO_MESSAGES
+    private fun withRemote(remote: List<InfoMessage>): List<InfoMessage> =
+        remote.filter { it.createdAtMs == 0L || it.createdAtMs >= installedAtMs } + INFO_MESSAGES
 
     // Pengumuman dari server (terbaru di atas) lalu pesan bawaan; cache terakhir dipakai saat offline.
     private val _messages = MutableStateFlow(
@@ -130,18 +144,36 @@ class InfoStore(context: Context) {
      * lama tidak membanjiri pengguna yang baru memperbarui aplikasi.
      */
     @Synchronized
-    fun takeUnnotified(): List<InfoMessage> {
+    fun takeUnnotified(): List<InfoMessage> = takeUnnotified(markFresh = true)
+
+    /**
+     * Seperti [takeUnnotified], tetapi kalau [markFresh] false, pengumuman yang baru dikembalikan TIDAK ditandai dulu
+     * (yang lama tetap ditandai). Pemanggil menandainya lewat [markNotified] setelah notifikasinya benar-benar tampil,
+     * jadi pengumuman tidak hilang kalau notifikasi gagal tampil atau terpotong batas jumlah.
+     */
+    @Synchronized
+    fun takeUnnotified(markFresh: Boolean): List<InfoMessage> {
         val builtIn = INFO_MESSAGES.map { it.id }.toSet()
         val remote = _messages.value.filter { it.id !in builtIn }
         val fresh = if (!notifiedReady) emptyList() else remote.filter { it.id !in notified && it.id !in _read.value }
-        notified += remote.map { it.id }
+        val freshIds = fresh.map { it.id }.toSet()
+        notified += remote.map { it.id }.filter { markFresh || it !in freshIds }
         notifiedReady = true
         prefs.edit().putStringSet(NOTIFIED_KEY, HashSet(notified)).apply()
         return fresh
     }
 
-    /** Ambil pengumuman terbaru dari server. Gagal / offline = tetap pakai yang tersimpan. */
-    suspend fun refresh() = withContext(Dispatchers.IO) {
+    /** Tandai pengumuman [ids] sudah diberi notifikasi. */
+    @Synchronized
+    fun markNotified(ids: Collection<String>) {
+        if (ids.isEmpty()) return
+        notified += ids
+        prefs.edit().putStringSet(NOTIFIED_KEY, HashSet(notified)).apply()
+    }
+
+    /** Ambil pengumuman terbaru dari server. Gagal / offline = tetap pakai yang tersimpan. Mengembalikan true kalau berhasil. */
+    suspend fun refresh(): Boolean = withContext(Dispatchers.IO) {
+        var ok = false
         try {
             val url = "$SUPABASE_URL/rest/v1/announcements" +
                 "?select=id,title,preview,blocks,title_en,preview_en,blocks_en,created_at" +
@@ -153,10 +185,12 @@ class InfoStore(context: Context) {
                 val parsed = parseAnnouncements(text)
                 prefs.edit().putString(CACHE_KEY, text).apply()
                 _messages.value = withRemote(parsed)
+                ok = true
             }
         } catch (e: Exception) {
             // offline atau server bermasalah: abaikan
         }
+        ok
     }
 
     fun markRead(id: String) {

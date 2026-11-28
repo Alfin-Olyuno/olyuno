@@ -26,7 +26,6 @@ import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Insights
 import androidx.compose.material.icons.rounded.LocalFireDepartment
-import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Mail
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.Settings
@@ -106,7 +105,7 @@ fun AndaScreen(
         MenuGroup {
             MenuItem(Icons.Rounded.Mic, t("Cari lagu"), onOpenFindSong)
             MenuDivider()
-            MenuItem(Icons.Rounded.AutoAwesome, t("Olyuno AI"), onOpenLyricsAnalysis)
+            MenuItem(OlyunoAiIcon, t("Olyuno AI"), onOpenLyricsAnalysis)
             MenuDivider()
             MenuItem(Icons.Rounded.History, t("Riwayat lagu"), onOpenHistory)
             MenuDivider()

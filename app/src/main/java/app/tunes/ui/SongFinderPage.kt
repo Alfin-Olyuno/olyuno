@@ -236,10 +236,9 @@ fun SongFinderPage(
                     style = MaterialTheme.typography.titleLarge,
                     textAlign = TextAlign.Center,
                 )
-                // Teks kecil di bawahnya hanya muncul kalau ada isinya (hasil dengar sementara / petunjuk coba lagi).
+                // Teks kecil di bawahnya hanya muncul kalau ada isinya (hasil dengar sementara).
                 val sub = when {
                     listening -> heardText.takeIf { it.isNotBlank() }
-                    message != null -> t("Ketuk mikrofon untuk mencoba lagi")
                     else -> null
                 }
                 if (sub != null) {

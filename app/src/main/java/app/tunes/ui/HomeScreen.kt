@@ -28,7 +28,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowForward
-import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import app.tunes.MixStatus
@@ -130,6 +129,9 @@ fun HomeScreen(
     val mixStatus by vm.mixStatus.collectAsStateWithLifecycle()
     val likedSongs by vm.liked.collectAsStateWithLifecycle()
     val streak by vm.streak.collectAsStateWithLifecycle()
+    // Tombol muat ulang ditekan: semua bagian tampil sebagai skeleton shimmer sampai selesai dimuat.
+    val refreshing by vm.homeRefreshing.collectAsStateWithLifecycle()
+    val aiSeed by vm.aiSuggestSeed.collectAsStateWithLifecycle()
     // Kembali ke aplikasi / Beranda: Mix dimuat ulang kalau sudah lama atau sebelumnya gagal.
     LifecycleResumeEffect(account?.name) {
         vm.refreshMix()
@@ -151,11 +153,13 @@ fun HomeScreen(
         }
 
         // ---- Streak: kartu kecil tepat di bawah sapaan; ketuk membuka halaman detail.
-        item(key = "streak") { StreakHomeCard(streak, onClick = onOpenStreak) }
+        item(key = "streak") { if (refreshing) StreakSkeleton() else StreakHomeCard(streak, onClick = onOpenStreak) }
 
         // ---- Genre cepat: kotak kecil berjejer ke kanan, bisa digeser; ketuk membuka halaman genre.
         item(key = "mood_row") {
-            LazyRow(
+            if (refreshing) {
+                MoodChipsSkeleton()
+            } else LazyRow(
                 modifier = Modifier.padding(top = 8.dp),
                 contentPadding = PaddingValues(horizontal = 16.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -167,7 +171,7 @@ fun HomeScreen(
         }
 
         // ---- Tanya Olyuno AI: kartu dengan saran pertanyaan; ketuk saran = obrolan baru yang langsung dikirim.
-        item(key = "ai_card") { AiHomeCard(now = now, lastSong = recent.firstOrNull(), onOpenAi = onOpenAi) }
+        item(key = "ai_card") { AiHomeCard(now = now, lastSong = recent.firstOrNull(), seed = aiSeed, onOpenAi = onOpenAi) }
 
         // ---- Lanjutkan: lagu yang terakhir diputar, 2 baris tumbuh ke kanan seperti "Sedang trending".
         // Disembunyikan sepenuhnya kalau belum ada riwayat putar.
@@ -177,7 +181,7 @@ fun HomeScreen(
                 val list = remember(recent) { recent.take(20) }
                 // Baris mengikuti jumlah lagu (maks. 2): satu lagu = satu baris, tanpa ruang kosong di bawahnya.
                 val rowCount = list.size.coerceIn(1, 2)
-                LazyHorizontalGrid(
+                if (refreshing) TrendingSkeleton(rows = rowCount) else LazyHorizontalGrid(
                     rows = GridCells.Fixed(rowCount),
                     modifier = Modifier.fillMaxWidth().height(gridHeight(rowCount, TRENDING_CARD_HEIGHT)),
                     contentPadding = PaddingValues(horizontal = 12.dp),
@@ -203,7 +207,7 @@ fun HomeScreen(
         item(key = "quick_row") {
             val picks = quickPicks
             when {
-                picks == null -> QuickPicksSkeleton()
+                refreshing || picks == null -> QuickPicksSkeleton()
                 picks.isEmpty() -> HomeRetry(
                     text = t("Pilihan cepat gagal dimuat. Ketuk untuk coba lagi."),
                     onClick = { vm.loadQuickPicks(force = true) },
@@ -246,7 +250,11 @@ fun HomeScreen(
                 MixHeader(shown, onClick = onOpenAccount)
             }
             item(key = "mix_row") {
-                LazyRow(
+                if (refreshing) {
+                    Row(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        repeat(3) { MixSkeletonCard() }
+                    }
+                } else LazyRow(
                     contentPadding = PaddingValues(horizontal = 16.dp),
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
@@ -270,7 +278,7 @@ fun HomeScreen(
         if (mostPlayed.isNotEmpty()) {
             item(key = "most_header") { HomeSectionTitle(t("Paling sering diputar")) }
             item(key = "most_row") {
-                LazyRow(
+                if (refreshing) TrendingSkeleton(rows = 1) else LazyRow(
                     contentPadding = PaddingValues(horizontal = 12.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
@@ -293,7 +301,7 @@ fun HomeScreen(
         if (replay.isNotEmpty()) {
             item(key = "replay_header") { HomeSectionTitle(t("Dengarkan lagi")) }
             item(key = "replay_row") {
-                LazyRow(
+                if (refreshing) TrendingSkeleton(rows = 1) else LazyRow(
                     contentPadding = PaddingValues(horizontal = 12.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
@@ -316,7 +324,7 @@ fun HomeScreen(
         if (topArtists.isNotEmpty()) {
             item(key = "anchor_header") { HomeSectionTitle(t("Andalanmu")) }
             item(key = "anchor_row") {
-                LazyRow(
+                if (refreshing) ArtistRowSkeleton() else LazyRow(
                     contentPadding = PaddingValues(horizontal = 12.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
@@ -334,11 +342,11 @@ fun HomeScreen(
 
         // ---- Rilis baru: album / single / EP tahun ini dari artis yang paling sering kamu putar.
         // Skeleton shimmer selama memuat; disembunyikan sepenuhnya kalau belum ada riwayat putar / tidak ada rilisan baru.
-        if (newReleases?.isEmpty() != true) {
+        if (refreshing || newReleases?.isEmpty() != true) {
             item(key = "new_header") { HomeSectionTitle(t("Rilis baru")) }
             item(key = "new_row") {
                 val list = newReleases
-                if (list == null) {
+                if (refreshing || list == null) {
                     NewReleasesSkeleton()
                 } else {
                     LazyRow(
@@ -359,10 +367,10 @@ fun HomeScreen(
         // yang sering kamu dengar di bawahnya (ketuk = buka halaman artis), lalu artis-artis yang mirip berjejer ke kanan.
         // Disembunyikan sepenuhnya kalau belum ada riwayat putar / belum ada hasil.
         // Selama masih memuat (null) tampil satu bagian skeleton shimmer dengan bentuk yang sama.
-        if (similar == null) {
+        if (refreshing || similar == null) {
             item(key = "sim_skeleton") { SimilarSkeleton() }
         }
-        similar?.forEachIndexed { idx, sim ->
+        if (!refreshing) similar?.forEachIndexed { idx, sim ->
             item(key = "sim_header_$idx") {
                 MixHeader(
                     account = AccountInfo(name = sim.artist, photoUrl = sim.artistThumbnail),
@@ -387,7 +395,7 @@ fun HomeScreen(
         item(key = "trending_row") {
             val list = trending
             when {
-                list == null -> TrendingSkeleton()
+                refreshing || list == null -> TrendingSkeleton()
                 list.isEmpty() -> HomeRetry(
                     text = t("Sedang trending gagal dimuat. Ketuk untuk coba lagi."),
                     onClick = { vm.loadTrending(force = true) },
@@ -420,7 +428,7 @@ fun HomeScreen(
         }
         item(key = "genre_grid") {
             val list = genres
-            if (list == null) {
+            if (refreshing || list == null) {
                 GenreSkeleton()
             } else {
                 // 3 baris, tumbuh ke kanan; digeser kalau tidak muat.
@@ -725,23 +733,50 @@ private fun MoodChip(genre: CollectionRef, onClick: () -> Unit) {
 /** Satu saran di kartu Olyuno AI: [label] tampil di chip, [prompt] dikirim ke Olyuno AI. */
 private class AiSuggestion(val label: String, val prompt: String)
 
-/** Saran menurut jam (sama dengan sapaan), lalu yang berdasar lagu terakhir diputar (kalau ada), lalu umum. */
-private fun aiSuggestions(nowMs: Long, last: SongItem?): List<AiSuggestion> {
+/** Jumlah chip saran yang tampil di kartu Olyuno AI. */
+private const val AI_SUGGESTION_COUNT = 5
+
+/**
+ * Saran untuk kartu Olyuno AI: kumpulan saran menurut jam, yang berdasar lagu terakhir diputar (kalau ada), dan umum,
+ * diacak dengan [seed] lalu diambil beberapa. Seed baru (aplikasi dibuka / Beranda dimuat ulang) = pilihan saran berubah.
+ */
+private fun aiSuggestions(nowMs: Long, last: SongItem?, seed: Int): List<AiSuggestion> {
     val hour = Calendar.getInstance().apply { timeInMillis = nowMs }.get(Calendar.HOUR_OF_DAY)
     val byTime = when (hour) {
-        in 5..11 -> AiSuggestion(t("Lagu penyemangat pagi"), t("Carikan lagu penyemangat untuk pagi hari"))
-        in 12..14 -> AiSuggestion(t("Lagu buat fokus"), t("Carikan lagu yang cocok untuk fokus bekerja"))
-        in 15..17 -> AiSuggestion(t("Lagu santai sore"), t("Carikan lagu santai untuk sore hari"))
-        else -> AiSuggestion(t("Lagu tenang malam"), t("Carikan lagu tenang untuk malam hari"))
+        in 5..11 -> listOf(
+            AiSuggestion(t("Lagu penyemangat pagi"), t("Carikan lagu penyemangat untuk pagi hari")),
+            AiSuggestion(t("Musik teman sarapan"), t("Carikan lagu santai untuk menemani sarapan")),
+        )
+        in 12..14 -> listOf(
+            AiSuggestion(t("Lagu buat fokus"), t("Carikan lagu yang cocok untuk fokus bekerja")),
+            AiSuggestion(t("Lagu semangat siang"), t("Carikan lagu yang bikin semangat di siang hari")),
+        )
+        in 15..17 -> listOf(
+            AiSuggestion(t("Lagu santai sore"), t("Carikan lagu santai untuk sore hari")),
+            AiSuggestion(t("Lagu perjalanan pulang"), t("Carikan lagu enak buat perjalanan pulang")),
+        )
+        else -> listOf(
+            AiSuggestion(t("Lagu tenang malam"), t("Carikan lagu tenang untuk malam hari")),
+            AiSuggestion(t("Lagu pengantar tidur"), t("Carikan lagu pengantar tidur")),
+        )
     }
-    return buildList {
-        add(byTime)
-        if (last != null && last.title.isNotBlank()) {
-            add(AiSuggestion(t("Mirip lagu terakhir"), t("Carikan lagu yang mirip dengan \"%s\" oleh %s", last.title, last.artist)))
-            add(AiSuggestion(t("Makna lagu terakhir"), t("Jelaskan makna lagu \"%s\" oleh %s.", last.title, last.artist)))
+    val byLast = if (last != null && last.title.isNotBlank()) buildList {
+        add(AiSuggestion(t("Mirip lagu terakhir"), t("Carikan lagu yang mirip dengan \"%s\" oleh %s", last.title, last.artist)))
+        add(AiSuggestion(t("Makna lagu terakhir"), t("Jelaskan makna lagu \"%s\" oleh %s.", last.title, last.artist)))
+        if (last.artist.isNotBlank()) {
+            add(AiSuggestion(t("Lagu lain dari artisnya"), t("Carikan lagu lain dari %s", last.artist)))
         }
-        add(AiSuggestion(t("Buatkan playlist"), t("Buatkan playlist dari lagu-lagu baru yang mungkin kusukai")))
-    }
+    } else emptyList()
+    val general = listOf(
+        AiSuggestion(t("Buatkan playlist"), t("Buatkan playlist dari lagu-lagu baru yang mungkin kusukai")),
+        AiSuggestion(t("Lagu galau"), t("Carikan lagu galau yang enak didengar")),
+        AiSuggestion(t("Lagu hits sekarang"), t("Carikan lagu yang lagi hits sekarang")),
+        AiSuggestion(t("Lagu buat olahraga"), t("Carikan lagu penyemangat untuk olahraga")),
+        AiSuggestion(t("Lagu akustik"), t("Carikan lagu akustik yang menenangkan")),
+        AiSuggestion(t("Artis baru"), t("Rekomendasikan artis baru yang mungkin kusukai")),
+        AiSuggestion(t("Lagu nostalgia"), t("Carikan lagu nostalgia yang enak didengar")),
+    )
+    return (byTime + byLast + general).shuffled(kotlin.random.Random(seed)).take(AI_SUGGESTION_COUNT)
 }
 
 /**
@@ -749,9 +784,9 @@ private fun aiSuggestions(nowMs: Long, last: SongItem?): List<AiSuggestion> {
  * yang bisa digeser (ketuk = obrolan baru yang langsung mengirim saran itu).
  */
 @Composable
-private fun AiHomeCard(now: Long, lastSong: SongItem?, onOpenAi: (String?) -> Unit) {
-    val suggestions = remember(now / 60_000, lastSong?.videoId, lastSong?.title, lastSong?.artist, app.tunes.i18n.I18n.effective) {
-        aiSuggestions(now, lastSong)
+private fun AiHomeCard(now: Long, lastSong: SongItem?, seed: Int, onOpenAi: (String?) -> Unit) {
+    val suggestions = remember(now / 60_000, lastSong?.videoId, lastSong?.title, lastSong?.artist, seed, app.tunes.i18n.I18n.effective) {
+        aiSuggestions(now, lastSong, seed)
     }
     val shape = RoundedCornerShape(24.dp)
     Column(
@@ -774,7 +809,7 @@ private fun AiHomeCard(now: Long, lastSong: SongItem?, onOpenAi: (String?) -> Un
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
-                    Icons.Rounded.AutoAwesome,
+                    OlyunoAiIcon,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.onPrimaryContainer,
                     modifier = Modifier.size(20.dp),
@@ -833,10 +868,10 @@ private fun QuickPicksSkeleton() {
 }
 
 @Composable
-private fun TrendingSkeleton() {
+private fun TrendingSkeleton(rows: Int = 2) {
     ProvideShimmer {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            repeat(2) {
+            repeat(rows) {
                 Row(
                     Modifier.padding(horizontal = 20.dp).height(TRENDING_CARD_HEIGHT),
                     horizontalArrangement = Arrangement.spacedBy(16.dp),
@@ -946,6 +981,54 @@ private fun SimilarSkeleton() {
                         Spacer(Modifier.height(6.dp))
                         ShimmerBox(Modifier.fillMaxWidth(0.5f).height(11.dp), RoundedCornerShape(6.dp))
                     }
+                }
+            }
+        }
+    }
+}
+
+/** Kerangka kartu streak di bawah sapaan. */
+@Composable
+private fun StreakSkeleton() {
+    ProvideShimmer {
+        ShimmerBox(
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp).height(60.dp),
+            RoundedCornerShape(18.dp),
+        )
+    }
+}
+
+/** Kerangka deretan chip genre cepat di bawah streak. */
+@Composable
+private fun MoodChipsSkeleton() {
+    ProvideShimmer {
+        Row(
+            Modifier.padding(start = 16.dp, top = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            repeat(4) { ShimmerBox(Modifier.size(width = 88.dp, height = 40.dp), RoundedCornerShape(12.dp)) }
+        }
+    }
+}
+
+/** Kerangka deretan avatar artis bulat ("Andalanmu"). */
+@Composable
+private fun ArtistRowSkeleton() {
+    ProvideShimmer {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            repeat(4) {
+                Column(
+                    modifier = Modifier
+                        .width(112.dp)
+                        .padding(start = 8.dp, top = 6.dp, end = 8.dp, bottom = 10.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    ShimmerBox(Modifier.fillMaxWidth().aspectRatio(1f), CircleShape)
+                    Spacer(Modifier.height(8.dp))
+                    ShimmerBox(Modifier.fillMaxWidth(0.75f).height(13.dp), RoundedCornerShape(7.dp))
                 }
             }
         }

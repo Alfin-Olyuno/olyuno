@@ -83,8 +83,11 @@ class AiTools(
             decl(
                 GET_LYRICS,
                 "Ambil lirik sebuah lagu dari layanan lirik untuk dianalisis (makna, tema, arti baris). Jangan disalin utuh ke jawaban.",
-                props("title" to str("Judul lagu"), "artist" to str("Nama artis")),
-                listOf("title", "artist"),
+                props(
+                    "title" to str("Judul lagu persis seperti di hasil search_songs"),
+                    "artist" to str("Nama artis persis seperti di hasil search_songs; kosongkan kalau belum tahu, jangan menebak"),
+                ),
+                listOf("title"),
             ),
         )
         .put(
@@ -255,12 +258,12 @@ class AiTools(
 
     private suspend fun checkLyrics(title: String, artist: String, snippet: String): JSONObject {
         if (snippet.isBlank()) return JSONObject().put("error", "lyrics_snippet kosong")
-        val song = resolveSong(title, artist) ?: return JSONObject().put("error", "lagu tidak ditemukan")
+        val song = resolveSong(title, artist, needArtist = true) ?: return JSONObject().put("error", "lagu tidak ditemukan")
         return verify(song, snippet.trim()).toJson()
     }
 
     private suspend fun getLyrics(title: String, artist: String): JSONObject {
-        val song = resolveSong(title, artist) ?: return JSONObject().put("error", "lagu tidak ditemukan")
+        val song = resolveSong(title, artist, needArtist = true) ?: return JSONObject().put("error", "lagu tidak ditemukan")
         val st = lyrics.load(song, LyricsSource.Auto)
         val out = JSONObject().put("title", song.title).put("artist", song.artist)
         return when (st) {
@@ -314,16 +317,26 @@ class AiTools(
         else -> "plain"
     }
 
-    /** Cari lagu YouTube Music untuk judul + artis; pilih yang judulnya paling mirip, kalau tidak ada hasil pertama. */
-    private suspend fun resolveSong(title: String, artist: String, strict: Boolean = false): SongItem? {
+    /** Huruf dan angka saja, huruf kecil: "Play Date" dan "Playdate" dianggap sama. */
+    private fun squash(s: String) = s.lowercase().filter { it.isLetterOrDigit() }
+
+    /**
+     * Cari lagu YouTube Music untuk judul + artis. Lagu yang tadi muncul di hasil alat (search_songs dst.) dipakai lebih dulu.
+     * [needArtist] = true (baca lirik): kalau artis disebut, hasil dengan artis lain TIDAK dipakai, supaya AI tidak
+     * menjelaskan lagu yang salah (mis. "Play Date" Melanie Martinez tertukar dengan "Playdates Song" CoComelon).
+     */
+    private suspend fun resolveSong(title: String, artist: String, strict: Boolean = false, needArtist: Boolean = false): SongItem? {
         val t = title.trim()
         if (t.isEmpty()) return null
+        recall(t, artist)?.let { return it }
         val results = innerTube.search((t + " " + artist.trim()).trim())
-        val low = t.lowercase()
+        val tq = squash(t)
         val a = artist.trim().lowercase()
-        return results.firstOrNull { it.title.lowercase().contains(low) && (a.isEmpty() || it.artist.lowercase().contains(a)) }
-            ?: results.firstOrNull { it.title.lowercase().contains(low) }
-            ?: (if (strict) null else results.firstOrNull())
+        val artistOk = { x: SongItem -> a.isEmpty() || x.artist.lowercase().contains(a) }
+        return results.firstOrNull { squash(it.title).contains(tq) && artistOk(it) }
+            ?: results.firstOrNull { squash(it.title) == tq && (a.isEmpty() || !needArtist) }
+            ?: (if (needArtist && a.isNotEmpty()) null else results.firstOrNull { squash(it.title).contains(tq) })
+            ?: (if (strict || (needArtist && a.isNotEmpty())) null else results.firstOrNull())
     }
 
     // ------------------------------------------------------------------ playlist
@@ -339,7 +352,7 @@ class AiTools(
 
     private fun recall(title: String, artist: String): SongItem? = synchronized(seen) {
         seen[norm(title, artist)] ?: seen.values.firstOrNull {
-            it.title.trim().equals(title.trim(), ignoreCase = true) && (artist.isBlank() || it.artist.contains(artist.trim(), ignoreCase = true))
+            squash(it.title) == squash(title) && (artist.isBlank() || it.artist.contains(artist.trim(), ignoreCase = true))
         }
     }
 

@@ -772,8 +772,22 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    private val _aiSuggestSeed = MutableStateFlow(kotlin.random.Random.nextInt())
+
+    /** Benih acak untuk chip saran di kartu Olyuno AI Beranda: baru tiap aplikasi dibuka dan tiap Beranda dimuat ulang. */
+    val aiSuggestSeed: StateFlow<Int> = _aiSuggestSeed.asStateFlow()
+
+    private val _homeRefreshing = MutableStateFlow(false)
+
+    /** true selama Beranda dimuat ulang lewat tombol muat ulang: semua bagian tampil sebagai skeleton shimmer. */
+    val homeRefreshing: StateFlow<Boolean> = _homeRefreshing.asStateFlow()
+    private var homeRefreshGen = 0
+
     /** Tombol muat ulang di Beranda: semua bagian dimuat ulang (genre ikut diacak). */
     fun refreshHome() {
+        val gen = ++homeRefreshGen
+        _homeRefreshing.value = true
+        _aiSuggestSeed.value = kotlin.random.Random.nextInt()
         loadQuickPicks(force = true)
         loadTrending(force = true)
         loadGenres(force = true)
@@ -783,6 +797,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         loadMixPlaylists()
         refreshStreak()
         refreshRecent()
+        // Kerangka tampil sampai semua bagian selesai dimuat (paling sedikit sebentar supaya kilaunya terlihat, paling lama 20 detik).
+        val jobs = listOfNotNull(quickJob, trendingJob, genresJob, similarJob, newReleasesJob, mixJob)
+        viewModelScope.launch {
+            val minShow = launch { delay(700) }
+            withTimeoutOrNull(20_000L) { kotlinx.coroutines.joinAll(*jobs.toTypedArray()) }
+            minShow.join()
+            // Muat ulang yang lebih baru sudah dimulai: biarkan yang itu yang menutup kerangkanya.
+            if (gen == homeRefreshGen) _homeRefreshing.value = false
+        }
     }
 
     /** Tombol muat ulang di Cari: hasil pencarian yang sedang tampil dicari ulang; kalau tidak ada, riwayat akun dimuat ulang. */
@@ -1484,9 +1507,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun refreshInfo(notify: Boolean = false) {
         viewModelScope.launch {
             container.info.refresh()
-            val fresh = container.info.takeUnnotified()
-            if (notify && fresh.isNotEmpty() && container.notificationPrefs.announcements.value) {
-                app.tunes.player.AnnouncementNotifier.post(getApplication(), fresh)
+            val on = container.notificationPrefs.announcements.value
+            // notify = false (Informasi dibuka) atau saklar mati: langsung ditandai. Selain itu ditandai setelah notifikasinya tampil.
+            val fresh = container.info.takeUnnotified(markFresh = !(notify && on))
+            if (notify && on && fresh.isNotEmpty()) {
+                container.info.markNotified(app.tunes.player.AnnouncementNotifier.post(getApplication(), fresh))
             }
         }
     }

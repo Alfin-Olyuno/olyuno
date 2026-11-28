@@ -42,6 +42,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -49,10 +50,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -79,6 +85,24 @@ fun SearchScreen(vm: MainViewModel, currentId: String?) {
     var confirmClear by remember { mutableStateOf(false) }
     var pendingRemove by remember { mutableStateOf<SongItem?>(null) }
     var focused by remember { mutableStateOf(false) }
+
+    // Isi kolom cari disimpan sebagai TextFieldValue supaya posisi kursor bisa diatur (mis. ke ujung teks).
+    var field by remember { mutableStateOf(TextFieldValue(query, TextRange(query.length))) }
+    val fieldFocus = remember { FocusRequester() }
+    val keyboard = LocalSoftwareKeyboardController.current
+    // Query berubah dari luar (dikosongkan, dipilih dari riwayat, dsb.): ikuti, kursor di ujung teks.
+    LaunchedEffect(query) {
+        if (field.text != query) field = TextFieldValue(query, TextRange(query.length))
+    }
+    // Panah di riwayat / saran: isi kolom cari dengan kata itu tanpa mencari, kursor langsung di paling akhir,
+    // dan keyboard terbuka supaya bisa langsung dilanjutkan mengetik.
+    val fillQuery: (String) -> Unit = { text ->
+        val filled = "$text "
+        field = TextFieldValue(filled, TextRange(filled.length))
+        vm.onQueryChange(filled)
+        fieldFocus.requestFocus()
+        keyboard?.show()
+    }
 
     // Tombol kembali setelah keyboard tertutup: lepas fokus supaya "Terakhir diputar" muncul lagi.
     BackHandler(enabled = focused) { focus.clearFocus() }
@@ -109,11 +133,16 @@ fun SearchScreen(vm: MainViewModel, currentId: String?) {
 
     Column(Modifier.fillMaxSize().padding(top = LocalTabTopInset.current)) {
         OutlinedTextField(
-            value = query,
-            onValueChange = vm::onQueryChange,
+            value = field,
+            onValueChange = { new ->
+                val textChanged = new.text != field.text
+                field = new
+                if (textChanged) vm.onQueryChange(new.text)
+            },
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp, vertical = 12.dp)
+                .focusRequester(fieldFocus)
                 .onFocusChanged { focused = it.isFocused },
             placeholder = { Text("Cari lagu, artis…") },
             singleLine = true,
@@ -168,7 +197,7 @@ fun SearchScreen(vm: MainViewModel, currentId: String?) {
                             modifier = Modifier.weight(1f),
                         )
                         // Panah: isi kolom cari dengan saran ini tanpa langsung mencari (untuk diedit lagi).
-                        IconButton(onClick = { vm.onQueryChange("$text ") }) {
+                        IconButton(onClick = { fillQuery(text) }) {
                             Icon(Icons.Rounded.NorthWest, contentDescription = t("Pakai saran ini"))
                         }
                     }
@@ -188,7 +217,7 @@ fun SearchScreen(vm: MainViewModel, currentId: String?) {
                                 vm.searchFromHistory(q)
                             },
                             onRemove = vm::removeSearchHistory,
-                            onClearAll = vm::clearSearchHistory,
+                            onFill = fillQuery,
                         )
                     }
                 }
@@ -201,7 +230,7 @@ fun SearchScreen(vm: MainViewModel, currentId: String?) {
                             entries = searchHistory.take(COLLAPSED_SEARCH_HISTORY),
                             onClick = vm::searchFromHistory,
                             onRemove = vm::removeSearchHistory,
-                            onClearAll = vm::clearSearchHistory,
+                            onFill = fillQuery,
                         )
                     }
                     if (history.isNotEmpty()) {
@@ -315,7 +344,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.searchHistorySection(
     entries: List<String>,
     onClick: (String) -> Unit,
     onRemove: (String) -> Unit,
-    onClearAll: () -> Unit,
+    onFill: (String) -> Unit,
 ) {
     item(key = "search_header") {
         Row(
@@ -327,9 +356,8 @@ private fun androidx.compose.foundation.lazy.LazyListScope.searchHistorySection(
             Text(
                 text = t("Riwayat pencarian"),
                 style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.weight(1f).padding(vertical = 12.dp),
             )
-            TextButton(onClick = onClearAll) { Text("Hapus semua") }
         }
     }
     items(entries, key = { "search_$it" }) { q ->
@@ -355,6 +383,10 @@ private fun androidx.compose.foundation.lazy.LazyListScope.searchHistorySection(
             )
             IconButton(onClick = { onRemove(q) }) {
                 Icon(Icons.Rounded.Close, contentDescription = t("Hapus dari riwayat"))
+            }
+            // Panah: isi kolom cari dengan kata ini (tanpa mencari), kursor di paling akhir.
+            IconButton(onClick = { onFill(q) }) {
+                Icon(Icons.Rounded.NorthWest, contentDescription = t("Pakai riwayat ini"))
             }
         }
     }

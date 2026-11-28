@@ -32,7 +32,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
-import androidx.compose.material.icons.rounded.Campaign
+import androidx.compose.material.icons.rounded.Mail
 import androidx.compose.material.icons.rounded.Downloading
 import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material.icons.rounded.LocalFireDepartment
@@ -203,7 +203,7 @@ fun NotificationsPage(
             SectionTitle(t("Pengumuman"))
             MenuGroup {
                 SwitchMenuRow(
-                    leading = { Icon(Icons.Rounded.Campaign, contentDescription = null, modifier = Modifier.size(24.dp)) },
+                    leading = { Icon(Icons.Rounded.Mail, contentDescription = null, modifier = Modifier.size(24.dp)) },
                     label = t("Pengumuman baru"),
                     description = t("Diberi tahu saat ada pengumuman baru dari Olyuno."),
                     checked = announceOn,

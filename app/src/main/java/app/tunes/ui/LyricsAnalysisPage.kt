@@ -276,9 +276,13 @@ fun LyricsAnalysisPage(
                                 isPlaying = player.isPlaying,
                                 question = chat.getOrNull(index - 1)?.takeIf { it.fromUser }?.text,
                                 onPlay = { song ->
-                                    // Lagu yang sudah diputar tidak dimulai ulang; langsung buka pemutar.
+                                    // Ketuk badan kartu: lagu yang sudah diputar tidak dimulai ulang; langsung buka pemutar.
                                     if (player.current?.videoId != song.videoId) vm.playSong(song)
                                     onOpenPlayer()
+                                },
+                                onPlayOnly = { song ->
+                                    // Ketuk tombol putar di kartu: hanya putar / jeda, TIDAK membuka halaman pemutar.
+                                    if (player.current?.videoId == song.videoId) vm.togglePlay() else vm.playSong(song)
                                 },
                                 onOpenEntity = { ref -> vm.openCollection(ref) },
                             )
@@ -291,6 +295,22 @@ fun LyricsAnalysisPage(
                                 kind = kind,
                                 onRetry = { vm.retryAnswer() },
                             )
+                        }
+                    }
+                }
+                // Obrolan masih kosong: satu chip pertanyaan (berganti tiap obrolan baru); ketuk = langsung dikirim.
+                if (chat.isEmpty() && !chatBusy) {
+                    val question = t(remember(convoId) { OLYUNO_AI_QUESTIONS.random() })
+                    Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp)) {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(MaterialTheme.colorScheme.surfaceContainerHighest)
+                                .clickable { vm.sendMessage(question) }
+                                .padding(horizontal = 14.dp, vertical = 9.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(question, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                     }
                 }
@@ -457,6 +477,15 @@ private fun UserMessage(text: String) {
     }
 }
 
+/** Pertanyaan untuk chip di halaman Olyuno AI yang masih kosong (dipilih acak; diterjemahkan lewat [t]). */
+private val OLYUNO_AI_QUESTIONS = listOf(
+    "Olyuno ada fitur apa saja?",
+    "Carikan lagu galau yang enak didengar",
+    "Rekomendasikan lagu buat malam ini",
+    "Lagu apa yang lagi hits sekarang?",
+    "Buatkan playlist untuk santai di rumah",
+)
+
 /**
  * Jawaban AI: teks polos selebar halaman (tanpa gelembung / kartu), format markdown ringan.
  * Kalau AI membahas sesuatu (blok [[LAGU]] / [[ARTIS]] / [[ALBUM]] / [[PLAYLIST]] di akhir jawaban), di atas teks muncul
@@ -473,6 +502,7 @@ private fun AiMessage(
     isPlaying: Boolean,
     question: String?,
     onPlay: (SongItem) -> Unit,
+    onPlayOnly: (SongItem) -> Unit,
     onOpenEntity: (CollectionRef) -> Unit,
 ) {
     // Teks dari server datang bergumpal (beberapa kalimat sekaligus). Supaya terbaca seperti diketik, yang ditampilkan
@@ -538,7 +568,7 @@ private fun AiMessage(
     }
     Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp)) {
         if (shown.isNotEmpty()) {
-            SongSummary(shown, songStates, entityStates, currentId, isPlaying, onPlay, onOpenEntity)
+            SongSummary(shown, songStates, entityStates, currentId, isPlaying, onPlay, onPlayOnly, onOpenEntity)
             Spacer(Modifier.height(12.dp))
         }
         if (parsed.text.isNotBlank()) AiMarkdown(parsed.text, live)
@@ -637,6 +667,7 @@ private fun SongSummary(
     currentId: String?,
     isPlaying: Boolean,
     onPlay: (SongItem) -> Unit,
+    onPlayOnly: (SongItem) -> Unit,
     onOpenEntity: (CollectionRef) -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
@@ -675,7 +706,7 @@ private fun SongSummary(
             Spacer(Modifier.height(6.dp))
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 refs.forEach { r ->
-                    RefCard(r, songStates, entityStates, currentId, isPlaying, Modifier.fillMaxWidth(), onPlay, onOpenEntity)
+                    RefCard(r, songStates, entityStates, currentId, isPlaying, Modifier.fillMaxWidth(), onPlay, onPlayOnly, onOpenEntity)
                 }
             }
         }
@@ -692,13 +723,18 @@ private fun RefCard(
     isPlaying: Boolean,
     modifier: Modifier,
     onPlay: (SongItem) -> Unit,
+    onPlayOnly: (SongItem) -> Unit,
     onOpenEntity: (CollectionRef) -> Unit,
 ) {
     when (r) {
         is AiRef.Song -> {
             val st = songStates[r.ref.key]
             val song = (st as? MainViewModel.AiSongState.Found)?.song
-            SongCard(r.ref, st, currentId, isPlaying, modifier, song?.let { s -> { onPlay(s) } })
+            SongCard(
+                r.ref, st, currentId, isPlaying, modifier,
+                onClick = song?.let { s -> { onPlay(s) } },
+                onPlayClick = song?.let { s -> { onPlayOnly(s) } },
+            )
         }
         is AiRef.Entity -> {
             val st = entityStates[r.ref.key]
@@ -708,7 +744,10 @@ private fun RefCard(
     }
 }
 
-/** Satu kartu lagu: sampul, judul, artis, ikon putar. [onClick] null = belum / tidak ketemu. */
+/**
+ * Satu kartu lagu: sampul, judul, artis, tombol putar. [onClick] (badan kartu) = putar + buka halaman pemutar;
+ * [onPlayClick] (tombol putar saja) = putar / jeda tanpa membuka pemutar. null = belum / tidak ketemu.
+ */
 @Composable
 private fun SongCard(
     ref: SongRef,
@@ -717,6 +756,7 @@ private fun SongCard(
     isPlaying: Boolean,
     modifier: Modifier,
     onClick: (() -> Unit)?,
+    onPlayClick: (() -> Unit)?,
 ) {
     val song = (state as? MainViewModel.AiSongState.Found)?.song
     val shape = RoundedCornerShape(18.dp)
@@ -757,12 +797,21 @@ private fun SongCard(
         if (song != null) {
             // Lagu ini sedang diputar: ikonnya jadi jeda; dijeda atau lagu lain yang diputar: kembali ke putar.
             val nowPlaying = isPlaying && song.videoId == currentId
-            Icon(
-                if (nowPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                contentDescription = if (nowPlaying) t("Jeda") else t("Putar"),
-                tint = if (song.videoId == currentId) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(end = 6.dp).size(24.dp),
-            )
+            // Tombol putar punya area ketuk sendiri (44dp), jadi tidak ikut memicu klik badan kartu.
+            Box(
+                Modifier
+                    .size(44.dp)
+                    .clip(CircleShape)
+                    .then(if (onPlayClick != null) Modifier.clickable(onClick = onPlayClick) else Modifier),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    if (nowPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                    contentDescription = if (nowPlaying) t("Jeda") else t("Putar"),
+                    tint = if (song.videoId == currentId) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(24.dp),
+                )
+            }
         }
     }
 }
