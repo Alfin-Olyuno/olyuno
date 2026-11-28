@@ -11,10 +11,17 @@ import app.tunes.innertube.fetchMixPlaylists
 import app.tunes.innertube.fetchMixSongs
 import app.tunes.innertube.fetchLiked
 import app.tunes.innertube.registerPlayback
+import app.tunes.innertube.addToPlaylist
+import app.tunes.innertube.createPlaylist
 import app.tunes.innertube.setLike
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+
+/** Hasil [YtSync.pushPlaylist]: [sent] = jumlah lagu yang dikirim, [skippedLocal] = lagu perangkat yang dilewati. */
+data class PlaylistPush(val remoteId: String, val created: Boolean, val sent: Int, val skippedLocal: Int)
+
+private const val CREATE_BATCH = 50
 
 /**
  * Menyambungkan penyimpanan lokal (Room) dengan akun YouTube Music. Tanpa login semua fungsi di sini
@@ -24,6 +31,7 @@ class YtSync(
     private val innerTube: InnerTube,
     private val account: AccountStore,
     private val repo: SongRepository,
+    private val links: PlaylistLinkStore,
 ) {
     private val mutex = Mutex()
 
@@ -36,6 +44,33 @@ class YtSync(
         if (!account.autoSync.value) return
         innerTube.setLike(cookie, videoId, liked)
         account.clearPending(videoId, liked)
+    }
+
+    /**
+     * Kirim playlist lokal ke akun YouTube Music. Belum pernah dikirim: dibuat sebagai playlist PRIBADI baru.
+     * Sudah pernah (ada tautan): lagu yang belum ada ditambahkan (yang sudah ada dilewati YouTube Music). Perubahan
+     * lain (hapus / urutan) tidak ikut dikirim. Lagu perangkat tidak ada di YouTube jadi dilewati.
+     * Mengembalikan null kalau belum masuk; melempar exception kalau jaringan / sesi bermasalah.
+     */
+    suspend fun pushPlaylist(playlist: LocalPlaylist): PlaylistPush? {
+        val cookie = account.cookie() ?: return null
+        val ids = playlist.songs.map { it.videoId }.filterNot { it.startsWith(app.tunes.innertube.LOCAL_ID_PREFIX) }.distinct()
+        val skipped = playlist.songs.size - ids.size
+        return mutex.withLock {
+            val existing = links.get(playlist.id)
+            if (ids.isEmpty()) return@withLock PlaylistPush(existing.orEmpty(), created = false, sent = 0, skippedLocal = skipped)
+            if (existing != null) {
+                val sent = innerTube.addToPlaylist(cookie, existing, ids)
+                PlaylistPush(existing, created = false, sent = sent, skippedLocal = skipped)
+            } else {
+                val first = ids.take(CREATE_BATCH)
+                val remote = innerTube.createPlaylist(cookie, playlist.name, first, description = "Dibuat lewat Olyuno")
+                links.set(playlist.id, remote)
+                val rest = ids.drop(CREATE_BATCH)
+                if (rest.isNotEmpty()) innerTube.addToPlaylist(cookie, remote, rest)
+                PlaylistPush(remote, created = true, sent = ids.size, skippedLocal = skipped)
+            }
+        }
     }
 
     /** Catat putaran ke riwayat akun. Bersifat tambahan, jadi kegagalan diabaikan. */

@@ -6,6 +6,8 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
@@ -43,6 +45,57 @@ suspend fun InnerTube.setLike(cookie: String, videoId: String, liked: Boolean) {
         put("target", buildJsonObject { put("videoId", videoId) })
     }
 }
+
+/**
+ * Buat playlist baru di akun YouTube Music (endpoint `playlist/create`, sama dengan yang dipakai situs YouTube Music).
+ * [videoIds] ikut langsung masuk. Mengembalikan id playlist baru. Bukan API resmi: bisa berubah sewaktu-waktu.
+ */
+suspend fun InnerTube.createPlaylist(
+    cookie: String,
+    title: String,
+    videoIds: List<String>,
+    description: String = "",
+    privacy: String = "PRIVATE",
+): String {
+    val headers = requireAuth(cookie)
+    val root = post(Clients.WEB_REMIX, "playlist/create", headers) {
+        put("title", title.take(150))
+        put("description", description.take(5000))
+        put("privacyStatus", privacy)
+        if (videoIds.isNotEmpty()) put("videoIds", buildJsonArray { videoIds.forEach { add(JsonPrimitive(it)) } })
+    }
+    return root["playlistId"].text?.takeIf { it.isNotBlank() }
+        ?: throw InnerTubeException(t("Gagal membuat playlist di YouTube Music"))
+}
+
+/**
+ * Tambah lagu ke playlist akun (endpoint `browse/edit_playlist`, aksi ADD_VIDEO). Lagu yang sudah ada di playlist
+ * dilewati oleh YouTube Music sendiri (DEDUPE_OPTION_SKIP). Dikirim per [EDIT_CHUNK] lagu. Mengembalikan jumlah lagu yang dikirim.
+ */
+suspend fun InnerTube.addToPlaylist(cookie: String, playlistId: String, videoIds: List<String>): Int {
+    val headers = requireAuth(cookie)
+    var sent = 0
+    for (chunk in videoIds.distinct().chunked(EDIT_CHUNK)) {
+        val root = post(Clients.WEB_REMIX, "browse/edit_playlist", headers) {
+            put("playlistId", playlistId.removePrefix("VL"))
+            put("actions", buildJsonArray {
+                chunk.forEach { id ->
+                    add(buildJsonObject {
+                        put("action", "ACTION_ADD_VIDEO")
+                        put("addedVideoId", id)
+                        put("dedupeOption", "DEDUPE_OPTION_SKIP")
+                    })
+                }
+            })
+        }
+        val status = root["status"].text
+        if (status != null && status != "STATUS_SUCCEEDED") throw InnerTubeException(t("Gagal menambah lagu ke playlist di YouTube Music"))
+        sent += chunk.size
+    }
+    return sent
+}
+
+private const val EDIT_CHUNK = 50
 
 /** Playlist "Disukai" (LM) milik akun, dengan halaman lanjutan sampai [MAX_PAGES]. */
 suspend fun InnerTube.fetchLiked(cookie: String): RemoteSongs {

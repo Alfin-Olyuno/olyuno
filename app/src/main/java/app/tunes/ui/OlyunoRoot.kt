@@ -60,6 +60,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import app.tunes.MainViewModel
+import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import app.tunes.i18n.t
@@ -102,8 +103,17 @@ fun OlyunoRoot(
     val infoRead by vm.infoReadIds.collectAsStateWithLifecycle()
     val infoMessages by vm.infoMessages.collectAsStateWithLifecycle()
     val infoUnread = infoMessages.count { it.id !in infoRead }
-    // Ambil pengumuman terbaru dari server begitu aplikasi dibuka.
-    androidx.compose.runtime.LaunchedEffect(Unit) { vm.refreshInfo() }
+    // Ambil pengumuman terbaru dari server begitu aplikasi dibuka, lalu periksa lagi tiap menit selama aplikasi tampil.
+    // Pengumuman baru langsung diberi notifikasi (pekerja latar belakang baru berjalan ~15 menit sekali).
+    val infoLifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
+    androidx.compose.runtime.LaunchedEffect(infoLifecycle) {
+        infoLifecycle.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
+            while (true) {
+                vm.refreshInfo(notify = true)
+                delay(60_000L)
+            }
+        }
+    }
 
     var tab by rememberSaveable { mutableIntStateOf(0) }
     // Halaman penuh dari tab Koleksi: -1 tidak ada, 0 Terakhir dilihat, 1 Disukai.
@@ -298,7 +308,17 @@ fun OlyunoRoot(
               ) {
                 TabEnter(tab) {
                 when (tab) {
-                    0 -> HomeScreen(vm, mostPlayed, currentId, onOpenLiked = { libraryPage = 1 }, onOpenAccount = { accountPage = true }, onOpenStreak = { andaPage = 14 })
+                    0 -> HomeScreen(vm, mostPlayed, currentId, onOpenLiked = { libraryPage = 1 }, onOpenAccount = { accountPage = true }, onOpenStreak = { andaPage = 14 }, onOpenAi = { prompt ->
+                        // Saran dari Beranda: obrolan baru yang langsung mengirim pertanyaannya; null = halaman kosong.
+                        // Ketukan ganda cepat tidak membuat obrolan kedua.
+                        if (andaPage != 16) {
+                            if (prompt != null) {
+                                vm.newChat()
+                                vm.sendMessage(prompt)
+                            }
+                            andaPage = 16
+                        }
+                    })
                     1 -> SearchScreen(vm, currentId)
                     2 -> CollectionHomeScreen(
                         onOpenRecent = { libraryPage = 0 },

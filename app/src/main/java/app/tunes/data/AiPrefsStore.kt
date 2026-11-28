@@ -10,9 +10,9 @@ import kotlinx.coroutines.flow.asStateFlow
  * (bisa diganti pengguna di pengaturan karena daftar model gratis Google sering berubah).
  */
 enum class AiModel(val label: String, val defaultId: String) {
-    Olyuno35("Olyuno 3.5", "gemini-3.5-flash"),
-    Olyuno38("Olyuno 3.8", "gemini-3.8-flash"),
-    Olyuno4("Olyuno 4", "gemini-4-hydrogen"),
+    /** Model buatan Olyuno sendiri (hasil fine-tune), berjalan di server Olyuno; kalau server mati, proxy memakai Gemini. */
+    Olyuno10("Olyuno 1.0", "olyuno-1.0"),
+    Olyuno35("Olyuno 2.0", "gemini-3.5-flash"),
 }
 
 /**
@@ -32,7 +32,7 @@ class AiPrefsStore(context: Context) {
     }
 
     private val _model = MutableStateFlow(
-        runCatching { AiModel.valueOf(prefs.getString(MODEL, null) ?: "") }.getOrDefault(AiModel.Olyuno38),
+        runCatching { AiModel.valueOf(prefs.getString(MODEL, null) ?: "") }.getOrDefault(AiModel.Olyuno10),
     )
     val model: StateFlow<AiModel> = _model.asStateFlow()
 

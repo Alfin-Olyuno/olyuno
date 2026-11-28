@@ -162,7 +162,7 @@ import app.tunes.i18n.t
 import app.tunes.player.PlayerState
 
 /**
- * Halaman "Olyuno AI": obrolan bebas soal musik dengan AI (Gemini).
+ * Halaman "Olyuno AI": obrolan bebas soal musik dengan AI (Olyuno 1.0 lokal atau Olyuno 2.0 berbasis Gemini).
  *
  * Saat dibuka halaman ini kosong: hanya panah + judul, tombol riwayat (hamburger) di kiri atas, dan kolom
  * "Tanya Olyuno" di bawah. Jawaban tampil seperti asisten AI pada umumnya (teks polos, bukan kartu).
@@ -182,10 +182,6 @@ fun LyricsAnalysisPage(
     val convoId by vm.convoId.collectAsStateWithLifecycle()
     val history by vm.bedahHistory.collectAsStateWithLifecycle()
     val model by vm.aiPrefs.model.collectAsStateWithLifecycle()
-
-    // Topik pertanyaan terakhir (lagu / playlist / artis) untuk teks indikator di samping titik menunggu.
-    val lastQuestion = chat.lastOrNull()?.takeIf { it.fromUser }?.text
-    val searchTopics = remember(lastQuestion) { SearchTopics.detect(lastQuestion) }
 
     var input by rememberSaveable { mutableStateOf("") }
     var drawerOpen by rememberSaveable { mutableStateOf(false) }
@@ -288,7 +284,7 @@ fun LyricsAnalysisPage(
                             )
                         }
                     }
-                    if (chatBusy && chat.lastOrNull()?.fromUser == true) item { TypingIndicator(searchTopics, aiStatus) }
+                    if (chatBusy && chat.lastOrNull()?.fromUser == true) item { TypingIndicator(aiStatus) }
                     chatError?.let { kind ->
                         item {
                             ErrorRow(
@@ -651,19 +647,6 @@ private fun SongSummary(
         label = "summaryChevron",
     )
     val sizeAnim = if (smooth) Modifier.animateContentSize(tween(220)) else Modifier
-    // Jenis yang kartunya masih dicari di YouTube Music; teksnya berganti kalau lebih dari satu jenis.
-    val loadingTopics = refs.mapNotNull { r ->
-        when (r) {
-            is AiRef.Song -> {
-                val st = songStates[r.ref.key]
-                if (st == null || st is MainViewModel.AiSongState.Loading) SearchTopic.Song else null
-            }
-            is AiRef.Entity -> {
-                val st = entityStates[r.ref.key]
-                if (st == null || st is MainViewModel.AiEntityState.Loading) topicOf(r.ref.kind) else null
-            }
-        }
-    }.distinct()
     Column(Modifier.fillMaxWidth().then(sizeAnim)) {
         Row(
             Modifier
@@ -679,10 +662,6 @@ private fun SongSummary(
                 contentDescription = null,
                 modifier = Modifier.size(20.dp).graphicsLayer { rotationZ = rotation },
             )
-            if (loadingTopics.isNotEmpty()) {
-                Spacer(Modifier.width(10.dp))
-                key(loadingTopics) { SearchingLabel(loadingTopics, MaterialTheme.typography.labelMedium) }
-            }
             if (refs.size > 1) {
                 Spacer(Modifier.weight(1f))
                 Text(
@@ -915,7 +894,7 @@ private fun blendedLook(ms: Float, i: Int): DotLook {
  * napas, ayun), berpindah antar gaya dengan mulus. Tampil sampai potongan pertama jawaban tiba.
  */
 @Composable
-private fun TypingIndicator(topics: List<SearchTopic> = emptyList(), status: String? = null) {
+private fun TypingIndicator(status: String? = null) {
     val transition = rememberInfiniteTransition(label = "typingDots")
     val total = DOT_SEGMENT_MS * DOT_PATTERNS
     val clock = transition.animateFloat(
@@ -952,14 +931,11 @@ private fun TypingIndicator(topics: List<SearchTopic> = emptyList(), status: Str
             // Olyuno AI sedang menjalankan alat (cari lagu, periksa lirik, ...): tampilkan kegiatan sebenarnya.
             Spacer(Modifier.width(2.dp))
             ToolStatusLabel(status)
-        } else if (topics.isNotEmpty()) {
-            Spacer(Modifier.width(2.dp))
-            SearchingLabel(topics)
         }
     }
 }
 
-/** Teks kegiatan alat dengan kilau yang menyapu kiri ke kanan, seperti [SearchingLabel] tapi untuk satu teks bebas. */
+/** Teks kegiatan alat dengan kilau yang menyapu kiri ke kanan. */
 @Composable
 private fun ToolStatusLabel(status: String, style: TextStyle = MaterialTheme.typography.bodyMedium) {
     val clock = rememberInfiniteTransition(label = "toolStatus").animateFloat(
@@ -973,13 +949,6 @@ private fun ToolStatusLabel(status: String, style: TextStyle = MaterialTheme.typ
 
 /** Satu sapuan kilau (kiri ke kanan) = 1600 ms. */
 private const val SWEEP_MS = 1600
-
-private fun searchLabel(topic: SearchTopic): String = when (topic) {
-    SearchTopic.Song -> t("Mencari lagu")
-    SearchTopic.Playlist -> t("Mencari playlist")
-    SearchTopic.Artist -> t("Mencari artis")
-    SearchTopic.Album -> t("Mencari album")
-}
 
 /**
  * Teks yang kilaunya menyapu dari kiri teks sampai kanan, lalu mengulang. Huruf digambar dulu, lalu gradien
@@ -1019,37 +988,6 @@ private fun ShimmerText(
                 )
             },
     )
-}
-
-/**
- * Indikator di kanan titik menunggu: "Mencari lagu" / "Mencari playlist" / "Mencari artis" dengan kilau yang
- * menyapu kiri ke kanan. Kalau pertanyaannya menyentuh lebih dari satu hal, teksnya berganti tiap satu sapuan.
- */
-@Composable
-private fun SearchingLabel(topics: List<SearchTopic>, style: TextStyle = MaterialTheme.typography.bodyMedium) {
-    val smooth = LocalSmoothAnim.current
-    val n = topics.size
-    val clock = rememberInfiniteTransition(label = "searchLabel").animateFloat(
-        initialValue = 0f,
-        targetValue = (SWEEP_MS * n).toFloat(),
-        animationSpec = infiniteRepeatable(tween(SWEEP_MS * n, easing = LinearEasing)),
-        label = "searchClock",
-    )
-    val index by remember(n) { derivedStateOf { (clock.value / SWEEP_MS).toInt().coerceIn(0, n - 1) } }
-    AnimatedContent(
-        targetState = topics[index.coerceIn(0, n - 1)],
-        transitionSpec = {
-            if (smooth) {
-                (fadeIn(tween(220)) + slideInVertically(tween(220)) { it / 2 }) togetherWith
-                    (fadeOut(tween(140)) + slideOutVertically(tween(140)) { -it / 2 })
-            } else {
-                EnterTransition.None togetherWith ExitTransition.None
-            }
-        },
-        label = "searchLabelSwap",
-    ) { topic ->
-        ShimmerText(searchLabel(topic), progress = { (clock.value % SWEEP_MS) / SWEEP_MS }, style = style)
-    }
 }
 
 // ---------------------------------------------------------------- markdown

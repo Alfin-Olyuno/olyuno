@@ -1,10 +1,13 @@
 package app.tunes.ai
 
+import app.tunes.data.PlaylistRepository
+import app.tunes.data.YtSync
 import app.tunes.innertube.CollectionKind
 import app.tunes.innertube.CollectionRef
 import app.tunes.innertube.InnerTube
 import app.tunes.innertube.SearchHit
 import app.tunes.innertube.SongItem
+import app.tunes.innertube.isAuthError
 import app.tunes.innertube.loadCollection
 import app.tunes.innertube.searchAll
 import app.tunes.lyrics.LyricsRepository
@@ -14,18 +17,22 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import org.json.JSONObject
 
 /**
  * Alat (function calling) yang dipanggil Olyuno AI sendiri: cari lagu, cari lagu dari potongan lirik, cek / ambil lirik,
- * cari artis, album, playlist, dan isi sebuah koleksi. Hasilnya data nyata dari YouTube Music dan layanan lirik
+ * cari artis, album, playlist, dan isi sebuah koleksi, serta membuat playlist di Olyuno dan (atas permintaan pengguna,
+ * kalau sudah login) mengirimnya ke akun YouTube Music. Hasilnya data nyata dari YouTube Music dan layanan lirik
  * (LRCLIB, Better Lyrics, BiniLyrics, Lyrics Plus lewat pilihan "Otomatis"), bukan tebakan AI.
  */
 class AiTools(
     private val innerTube: InnerTube,
     private val lyrics: LyricsRepository,
+    private val playlists: PlaylistRepository,
+    private val sync: YtSync,
 ) {
     /** Teks indikator (bahasa Indonesia, lewat t() di UI) saat alat [name] sedang berjalan. */
     fun statusOf(name: String): String = when (name) {
@@ -37,6 +44,8 @@ class AiTools(
         SEARCH_ALBUMS -> "Mencari album"
         SEARCH_PLAYLISTS -> "Mencari playlist"
         GET_TRACKS -> "Membuka daftar lagu"
+        CREATE_PLAYLIST -> "Membuat playlist"
+        ADD_TO_YT -> "Mengirim ke YouTube Music"
         else -> "Mencari"
     }
 
@@ -114,6 +123,26 @@ class AiTools(
                 listOf("type", "name"),
             ),
         )
+        .put(
+            decl(
+                CREATE_PLAYLIST,
+                "Buat playlist di aplikasi Olyuno berisi lagu-lagu. Panggil HANYA setelah hasil pencarian diterima (search_songs / get_collection_tracks), dan isi songs dengan judul + artis persis seperti di hasil alat, maksimal 30 lagu. Kalau playlist dengan nama yang sama sudah ada, lagunya ditambahkan ke playlist itu. Isi add_to_youtube_music = true HANYA kalau pengguna jelas meminta playlist ini juga dimasukkan ke akun YouTube Music-nya.",
+                props(
+                    "name" to str("Nama playlist, singkat dan jelas (maks 60 huruf)"),
+                    "songs" to songList("Daftar lagu untuk playlist, urut seperti yang diinginkan"),
+                    "add_to_youtube_music" to bool("true hanya kalau pengguna meminta playlist ini dimasukkan ke akun YouTube Music-nya; bawaan false"),
+                ),
+                listOf("name", "songs"),
+            ),
+        )
+        .put(
+            decl(
+                ADD_TO_YT,
+                "Kirim playlist Olyuno yang SUDAH ADA ke akun YouTube Music pengguna (harus sudah login). Panggil hanya kalau pengguna meminta. Kalau playlist itu sudah pernah dikirim, lagu yang belum ada ditambahkan.",
+                props("name" to str("Nama playlist di Olyuno (persis atau mirip)")),
+                listOf("name"),
+            ),
+        )
 
     /** Jalankan alat. Tidak pernah melempar kecuali dibatalkan: kegagalan dikembalikan sebagai {"error": ...} supaya AI bisa menjelaskannya. */
     suspend fun run(name: String, args: JSONObject): JSONObject = try {
@@ -126,6 +155,8 @@ class AiTools(
             SEARCH_ALBUMS -> searchEntities(args.optString("query"), CollectionKind.ALBUM)
             SEARCH_PLAYLISTS -> searchEntities(args.optString("query"), CollectionKind.PLAYLIST)
             GET_TRACKS -> getTracks(args.optString("type"), args.optString("name"), args.optString("by"))
+            CREATE_PLAYLIST -> createPlaylist(args)
+            ADD_TO_YT -> addPlaylistToYt(args.optString("name"))
             else -> JSONObject().put("error", "alat tidak dikenal: $name")
         }
     } catch (e: CancellationException) {
@@ -140,6 +171,7 @@ class AiTools(
         val q = query.trim()
         if (q.isEmpty()) return JSONObject().put("error", "query kosong")
         val songs = innerTube.search(q).distinctBy { it.videoId }.take(limit.coerceIn(1, 10))
+        remember(songs)
         return JSONObject().put("songs", JSONArray(songs.map { songJson(it) })).also {
             if (songs.isEmpty()) it.put("note", "tidak ada hasil")
         }
@@ -182,6 +214,7 @@ class AiTools(
         val ref = byName ?: (if (kind == CollectionKind.ALBUM) null else pool.firstOrNull())
             ?: return JSONObject().put("error", "tidak ditemukan")
         val data = innerTube.loadCollection(ref)
+        remember(data.songs)
         val out = JSONObject()
             .put("name", ref.title)
             .put("type", type.trim().lowercase())
@@ -207,6 +240,7 @@ class AiTools(
             if (candidates.size >= MAX_LYRIC_CANDIDATES) break
         }
         val list = candidates.values.take(MAX_LYRIC_CANDIDATES)
+        remember(list)
         if (list.isEmpty()) return JSONObject().put("matches", JSONArray()).put("note", "tidak ada kandidat; coba tebak lagunya lalu pakai check_lyrics")
         val checked = withTimeoutOrNull(LYRIC_TIMEOUT_MS) {
             coroutineScope { list.map { song -> async { verify(song, s) } }.awaitAll() }
@@ -281,7 +315,7 @@ class AiTools(
     }
 
     /** Cari lagu YouTube Music untuk judul + artis; pilih yang judulnya paling mirip, kalau tidak ada hasil pertama. */
-    private suspend fun resolveSong(title: String, artist: String): SongItem? {
+    private suspend fun resolveSong(title: String, artist: String, strict: Boolean = false): SongItem? {
         val t = title.trim()
         if (t.isEmpty()) return null
         val results = innerTube.search((t + " " + artist.trim()).trim())
@@ -289,7 +323,125 @@ class AiTools(
         val a = artist.trim().lowercase()
         return results.firstOrNull { it.title.lowercase().contains(low) && (a.isEmpty() || it.artist.lowercase().contains(a)) }
             ?: results.firstOrNull { it.title.lowercase().contains(low) }
-            ?: results.firstOrNull()
+            ?: (if (strict) null else results.firstOrNull())
+    }
+
+    // ------------------------------------------------------------------ playlist
+
+    /** Lagu dari hasil alat sebelumnya, supaya create_playlist tidak mencari ulang tiap lagu (dibatasi, yang terlama dibuang). */
+    private val seen = object : LinkedHashMap<String, SongItem>(64, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, SongItem>): Boolean = size > MAX_SEEN
+    }
+
+    private fun norm(title: String, artist: String) = title.trim().lowercase() + "|" + artist.trim().lowercase()
+
+    private fun remember(songs: List<SongItem>) = synchronized(seen) { songs.forEach { seen[norm(it.title, it.artist)] = it } }
+
+    private fun recall(title: String, artist: String): SongItem? = synchronized(seen) {
+        seen[norm(title, artist)] ?: seen.values.firstOrNull {
+            it.title.trim().equals(title.trim(), ignoreCase = true) && (artist.isBlank() || it.artist.contains(artist.trim(), ignoreCase = true))
+        }
+    }
+
+    private suspend fun resolveForPlaylist(title: String, artist: String): SongItem? {
+        recall(title, artist)?.let { return it }
+        return try {
+            resolveSong(title, artist, strict = true)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private suspend fun createPlaylist(args: JSONObject): JSONObject {
+        val name = args.optString("name").trim().take(60)
+        if (name.isEmpty()) return JSONObject().put("error", "name kosong")
+        val arr = args.optJSONArray("songs")
+        val wanted = ArrayList<Pair<String, String>>()
+        if (arr != null) {
+            for (i in 0 until minOf(arr.length(), MAX_PLAYLIST_SONGS)) {
+                val o = arr.optJSONObject(i) ?: continue
+                val title = o.optString("title").trim()
+                if (title.isNotEmpty()) wanted += title to o.optString("artist").trim()
+            }
+        }
+        if (wanted.isEmpty()) return JSONObject().put("error", "songs kosong; cari lagunya dulu lalu isi songs")
+
+        val found = LinkedHashMap<String, SongItem>()
+        val notFound = ArrayList<String>()
+        for (group in wanted.chunked(4)) {
+            val results = coroutineScope { group.map { (t, a) -> async { resolveForPlaylist(t, a) } }.awaitAll() }
+            for ((w, song) in group.zip(results)) {
+                if (song == null) {
+                    notFound.add(if (w.second.isNotEmpty()) w.first + " - " + w.second else w.first)
+                } else {
+                    found.putIfAbsent(song.videoId, song)
+                }
+            }
+        }
+        val songs = found.values.toList()
+        if (songs.isEmpty()) return JSONObject().put("error", "tidak ada lagu yang ditemukan, playlist tidak dibuat").put("not_found", JSONArray(notFound))
+
+        val existing = playlists.playlists.first().firstOrNull { it.name.trim().equals(name, ignoreCase = true) }
+        val id: Long
+        if (existing != null) {
+            playlists.addSongs(existing.id, songs)
+            id = existing.id
+        } else {
+            id = playlists.create(name, songs)
+        }
+        val out = JSONObject()
+            .put("name", existing?.name ?: name)
+            .put("created", existing == null)
+            .put("merged_into_existing", existing != null)
+            .put("song_count", songs.size)
+            .put("songs", JSONArray(songs.map { songJson(it) }))
+        if (notFound.isNotEmpty()) out.put("not_found", JSONArray(notFound))
+        if (args.optBoolean("add_to_youtube_music", false)) pushToYt(id, out)
+        return out
+    }
+
+    private suspend fun addPlaylistToYt(name: String): JSONObject {
+        val n = name.trim()
+        if (n.isEmpty()) return JSONObject().put("error", "name kosong")
+        val all = playlists.playlists.first()
+        val pl = all.firstOrNull { it.name.trim().equals(n, ignoreCase = true) }
+            ?: all.firstOrNull { it.name.contains(n, ignoreCase = true) }
+            ?: return JSONObject()
+                .put("error", "playlist tidak ditemukan di Olyuno")
+                .put("available_playlists", JSONArray(all.take(20).map { it.name }))
+        if (pl.songs.isEmpty()) return JSONObject().put("error", "playlist masih kosong")
+        val out = JSONObject().put("name", pl.name)
+        pushToYt(pl.id, out)
+        return out
+    }
+
+    /** Kirim playlist lokal [id] ke YouTube Music dan taruh hasilnya di [out] ("youtube_music" + keterangan). Tidak pernah melempar kecuali dibatalkan. */
+    private suspend fun pushToYt(id: Long, out: JSONObject) {
+        val pl = playlists.playlists.first().firstOrNull { it.id == id }
+        if (pl == null) {
+            out.put("youtube_music", "failed")
+            return
+        }
+        try {
+            val r = sync.pushPlaylist(pl)
+            when {
+                r == null -> out.put("youtube_music", "not_signed_in")
+                    .put("note", "pengguna belum masuk ke akun YouTube Music; minta masuk lewat tab Anda > Masuk dengan Google, lalu minta lagi. Playlist di Olyuno tetap sudah ada")
+                r.sent == 0 -> out.put("youtube_music", "nothing_to_send")
+                    .put("note", "tidak ada lagu YouTube Music di playlist ini (lagu perangkat tidak bisa dikirim)")
+                else -> out.put("youtube_music", if (r.created) "created" else "updated")
+                    .put("songs_sent", r.sent)
+                    .put("private", true)
+                    .also { if (r.skippedLocal > 0) it.put("local_songs_skipped", r.skippedLocal) }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            out.put("youtube_music", "failed")
+                .put("note", if (e.isAuthError()) "sesi akun YouTube Music habis; minta pengguna masuk lagi lewat tab Anda" else "gagal mengirim ke YouTube Music, bisa dicoba lagi")
+        }
     }
 
     // ------------------------------------------------------------------ pencocokan lirik
@@ -344,6 +496,18 @@ class AiTools(
 
     private fun str(desc: String) = JSONObject().put("type", "STRING").put("description", desc)
     private fun int(desc: String) = JSONObject().put("type", "INTEGER").put("description", desc)
+    private fun bool(desc: String) = JSONObject().put("type", "BOOLEAN").put("description", desc)
+
+    private fun songList(desc: String) = JSONObject()
+        .put("type", "ARRAY")
+        .put("description", desc)
+        .put(
+            "items",
+            JSONObject()
+                .put("type", "OBJECT")
+                .put("properties", props("title" to str("Judul lagu persis seperti di hasil alat"), "artist" to str("Nama artis persis seperti di hasil alat")))
+                .put("required", JSONArray(listOf("title"))),
+        )
 
     private fun props(vararg p: Pair<String, JSONObject>): JSONObject {
         val o = JSONObject()
@@ -372,6 +536,11 @@ class AiTools(
         const val SEARCH_ALBUMS = "search_albums"
         const val SEARCH_PLAYLISTS = "search_playlists"
         const val GET_TRACKS = "get_collection_tracks"
+        const val CREATE_PLAYLIST = "create_playlist"
+        const val ADD_TO_YT = "add_playlist_to_youtube_music"
+
+        const val MAX_PLAYLIST_SONGS = 30
+        const val MAX_SEEN = 300
 
         const val MAX_LYRIC_CANDIDATES = 6
         const val LYRIC_TIMEOUT_MS = 25_000L

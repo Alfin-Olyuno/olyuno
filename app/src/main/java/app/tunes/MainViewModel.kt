@@ -1206,7 +1206,58 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun deletePlaylist(id: Long) {
-        viewModelScope.launch { container.playlists.delete(id) }
+        viewModelScope.launch {
+            container.playlists.delete(id)
+            // Hanya menghapus tautannya; playlist di akun YouTube Music tidak ikut terhapus.
+            container.playlistLinks.remove(id)
+        }
+    }
+
+    /** Playlist lokal yang sudah dikirim ke YouTube Music: id lokal -> id playlist YouTube Music. */
+    val playlistLinks: StateFlow<Map<Long, String>> = container.playlistLinks.links
+
+    /**
+     * Kirim playlist ke akun YouTube Music (pribadi). Pertama kali membuat playlist baru; berikutnya menambah lagu yang
+     * belum ada. Hasilnya dikabarkan lewat [messages].
+     */
+    fun pushPlaylistToYt(playlist: app.tunes.data.LocalPlaylist) {
+        if (container.account.cookie() == null) {
+            _messages.tryEmit(t("Masuk dengan Google dulu lewat tab Anda"))
+            return
+        }
+        viewModelScope.launch {
+            val pl = container.playlists.playlists.first().firstOrNull { it.id == playlist.id } ?: return@launch
+            _messages.tryEmit(t("Mengirim ke YouTube Music…"))
+            try {
+                val r = container.sync.pushPlaylist(pl)
+                when {
+                    r == null -> _messages.tryEmit(t("Masuk dengan Google dulu lewat tab Anda"))
+                    r.sent == 0 -> _messages.tryEmit(t("Tidak ada lagu YouTube Music di playlist ini untuk dikirim"))
+                    else -> {
+                        val base = if (r.created) {
+                            t("Playlist \"%s\" dibuat di YouTube Music (%d lagu)", pl.name, r.sent)
+                        } else {
+                            t("Playlist \"%s\" diperbarui di YouTube Music", pl.name)
+                        }
+                        _messages.tryEmit(if (r.skippedLocal > 0) base + " " + t("%d lagu perangkat dilewati", r.skippedLocal) else base)
+                        loadMixPlaylists() // playlist baru ikut tampil di Mix untukmu
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _messages.tryEmit(
+                    if (e.isAuthError()) t("Sesi YouTube Music habis, masuk lagi lewat tab Anda")
+                    else t("Gagal mengirim ke YouTube Music, coba lagi"),
+                )
+            }
+        }
+    }
+
+    /** Lepas tautan playlist ke YouTube Music (hanya di Olyuno; playlist di akun tidak dihapus). */
+    fun unlinkPlaylist(id: Long) {
+        container.playlistLinks.remove(id)
+        _messages.tryEmit(t("Tautan ke YouTube Music dilepas"))
     }
 
     fun removeFromPlaylist(id: Long, videoId: String) {
@@ -1408,6 +1459,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _mixStatus.value = MixStatus.Idle
         mixLoadedAt = 0L
         container.account.clear()
+        container.playlistLinks.clear() // tautan milik akun yang keluar
         android.webkit.CookieManager.getInstance().removeAllCookies(null)
     }
 
@@ -1424,12 +1476,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val infoReadIds: StateFlow<Set<String>> = container.info.readIds
     val infoMessages: StateFlow<List<app.tunes.data.InfoMessage>> = container.info.messages
 
-    /** Ambil pengumuman terbaru dari server (dipanggil saat aplikasi dibuka dan saat halaman Informasi dibuka). */
-    fun refreshInfo() {
+    /**
+     * Ambil pengumuman terbaru dari server. [notify] = true (aplikasi dibuka / sedang terbuka): pengumuman baru yang belum
+     * pernah diberi notifikasi langsung dimunculkan sebagai notifikasi. false (halaman Informasi dibuka): hanya ditandai
+     * sudah ditangani, karena pengguna sedang membacanya.
+     */
+    fun refreshInfo(notify: Boolean = false) {
         viewModelScope.launch {
             container.info.refresh()
-            // Pengguna sedang di aplikasi dan melihat titik/badge, jadi tidak perlu notifikasi lagi untuk pengumuman ini.
-            container.info.takeUnnotified()
+            val fresh = container.info.takeUnnotified()
+            if (notify && fresh.isNotEmpty() && container.notificationPrefs.announcements.value) {
+                app.tunes.player.AnnouncementNotifier.post(getApplication(), fresh)
+            }
         }
     }
 

@@ -435,6 +435,7 @@ private fun PlayerPage(
     // Menu halaman player: Timer tidur (tombol titik tiga di pojok kanan atas).
     val sleepState by vm.sleepTimer.collectAsStateWithLifecycle()
     val normalizeVolume by vm.normalizeVolume.collectAsStateWithLifecycle()
+    val keepAwake by vm.keepScreenAwake.collectAsStateWithLifecycle()
     var showPlayerMenu by remember { mutableStateOf(false) }
     var showSleepSheet by remember { mutableStateOf(false) }
     var showClearQueue by remember { mutableStateOf(false) }
@@ -649,6 +650,8 @@ private fun PlayerPage(
             },
             normalizeVolume = normalizeVolume,
             onNormalizeVolumeChange = vm::setNormalizeVolume,
+            keepAwake = keepAwake,
+            onKeepAwakeChange = vm::setKeepScreenAwake,
             onDismiss = { showPlayerMenu = false },
         )
     }

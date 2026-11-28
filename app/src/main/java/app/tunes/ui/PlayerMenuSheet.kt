@@ -28,7 +28,7 @@ import app.tunes.i18n.t
 
 /**
  * Menu singkat di halaman player (tombol titik tiga di sebelah "Sedang diputar"):
- * Timer tidur, Unduh lagu yang sedang diputar, slider volume perangkat, dan Normalisasi volume.
+ * Timer tidur, Unduh lagu yang sedang diputar, slider volume perangkat, Normalisasi volume, dan Jaga layar tetap hidup.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -45,6 +45,9 @@ fun PlayerMenuSheet(
     onAddToPlaylist: () -> Unit,
     normalizeVolume: Boolean,
     onNormalizeVolumeChange: (Boolean) -> Unit,
+    /** Sama dengan "Jaga layar tetap hidup" di menu lirik dan Pengaturan > Lirik (satu pengaturan yang sama). */
+    keepAwake: Boolean,
+    onKeepAwakeChange: (Boolean) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -83,6 +86,7 @@ fun PlayerMenuSheet(
                 SheetActionRow(t("Tambah ke playlist"), Icons.Rounded.LibraryAdd, onAddToPlaylist)
                 DeviceVolumeSlider(Modifier.padding(horizontal = 4.dp, vertical = 12.dp))
                 ToggleRow(t("Normalisasi volume"), normalizeVolume, onNormalizeVolumeChange)
+                ToggleRow(t("Jaga layar tetap hidup"), keepAwake, onKeepAwakeChange)
             }
             Spacer(Modifier.height(12.dp))
         }

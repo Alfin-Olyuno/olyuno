@@ -117,7 +117,7 @@ fun AboutPage(
             SectionTitle(t("Olyuno AI"))
             MenuGroup {
                 Text(
-                    t("Olyuno AI ditenagai Gemini dari Google. Pertanyaanmu, judul, artis, lirik yang dianalisis, dan hasil pencarian yang diminta Olyuno AI dikirim ke Google. Di paket gratis, isi permintaan dapat dipakai Google untuk meningkatkan produknya."),
+                    t("Olyuno AI punya dua model. Olyuno 1.0 adalah model buatan Olyuno sendiri yang berjalan di server Olyuno (model lokal), tanpa melibatkan Google; hanya kalau server itu sedang tidak tersedia, permintaan dialihkan ke Gemini dari Google. Olyuno 2.0 bukan model buatan Olyuno sendiri: model ini memakai Gemini dari Google. Pertanyaanmu, judul, artis, lirik yang dianalisis, dan hasil pencarian yang diminta Olyuno AI dikirim ke server Olyuno, dan ke Google hanya bila kamu memakai Olyuno 2.0 atau saat dialihkan. Di paket gratis, isi permintaan yang dikirim ke Google dapat dipakai Google untuk meningkatkan produknya."),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp),

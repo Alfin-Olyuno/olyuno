@@ -29,7 +29,8 @@ import java.util.concurrent.TimeUnit
  */
 object AnnouncementNotifier {
     private const val WORK_NAME = "announcement_check"
-    private const val CHANNEL = "announcements"
+    private const val CHANNEL = "announcements_v2"
+    private const val OLD_CHANNEL = "announcements"
     private const val MAX_SHOWN = 3
 
     /** Jadwalkan pemeriksaan berkala (aman dipanggil berulang: yang sudah terjadwal dipertahankan). */
@@ -46,7 +47,9 @@ object AnnouncementNotifier {
     private fun ensureChannel(context: Context) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val mgr = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        mgr.createNotificationChannel(NotificationChannel(CHANNEL, t("Pengumuman"), NotificationManager.IMPORTANCE_DEFAULT))
+        // Kanal lama (kepentingan sedang, tanpa pop-up) diganti kanal baru yang muncul sebagai pop-up; kepentingan kanal tidak bisa diubah setelah dibuat.
+        mgr.deleteNotificationChannel(OLD_CHANNEL)
+        mgr.createNotificationChannel(NotificationChannel(CHANNEL, t("Pengumuman"), NotificationManager.IMPORTANCE_HIGH))
     }
 
     /** Satu notifikasi per pengumuman (maksimal 3 sekaligus); ketuk membuka halaman Informasi. */
@@ -69,6 +72,7 @@ object AnnouncementNotifier {
                 .setContentText(text)
                 .setStyle(NotificationCompat.BigTextStyle().bigText(text))
                 .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
                 .setAutoCancel(true)
                 .setContentIntent(open)
                 .build()
@@ -84,8 +88,7 @@ class AnnouncementWorker(context: Context, params: WorkerParameters) : Coroutine
         container.info.refresh()
         // Selalu ditandai sudah ditangani, supaya menyalakan saklar nanti tidak memunculkan pengumuman lama.
         val fresh = container.info.takeUnnotified()
-        // Kalau aplikasi sedang terbuka, pengguna sudah melihat titik "belum dibaca" di aplikasi.
-        if (fresh.isNotEmpty() && container.notificationPrefs.announcements.value && !app.appVisible.value) {
+        if (fresh.isNotEmpty() && container.notificationPrefs.announcements.value) {
             AnnouncementNotifier.post(applicationContext, fresh)
         }
         return Result.success()

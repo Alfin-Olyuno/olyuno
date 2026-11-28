@@ -44,7 +44,6 @@ class AppContainer(context: Context) {
     val aiPrefs = app.tunes.data.AiPrefsStore(context)
     val bedahHistory = app.tunes.data.BedahHistoryStore(context)
     val lyricsAnalyzer = app.tunes.ai.LyricsAnalyzer(context.cacheDir)
-    val aiTools = app.tunes.ai.AiTools(innerTube, lyrics)
     val sleepTimer = app.tunes.data.SleepTimerStore()
     val streak = app.tunes.data.StreakStore(context)
     val islandPrefs = app.tunes.data.IslandPrefsStore(context)
@@ -55,7 +54,9 @@ class AppContainer(context: Context) {
     val searchHistory = SearchHistoryStore(context)
     val account = AccountStore(context)
     val appearance = AppearanceStore(context)
-    val sync = YtSync(innerTube, account, songs)
+    val playlistLinks = app.tunes.data.PlaylistLinkStore(context)
+    val sync = YtSync(innerTube, account, songs, playlistLinks)
+    val aiTools = app.tunes.ai.AiTools(innerTube, lyrics, playlists, sync)
     val equalizer = EqualizerController(context)
     /** Level suara asli lagu (dari jalur audio pemutar) untuk gelombang di Dynamic Island. */
     val audioLevels = app.tunes.player.AudioLevels()

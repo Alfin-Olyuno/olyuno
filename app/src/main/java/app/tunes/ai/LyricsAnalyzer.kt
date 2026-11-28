@@ -7,6 +7,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.InternalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -18,6 +19,7 @@ import org.json.JSONObject
 import java.io.File
 import java.io.IOException
 import java.util.concurrent.TimeUnit
+import kotlin.random.Random
 
 /** Hasil Olyuno AI satu lagu. [background] null = AI tidak cukup yakin soal latar belakang. */
 data class LyricsAnalysis(
@@ -55,7 +57,8 @@ data class LyricsAnalysis(
 /** Jenis kegagalan, dipakai UI untuk memilih pesan dan tombol yang pas. */
 enum class AiErrorKind { NoKey, BadKey, ModelNotFound, Quota, Network, Blocked, Server, Parse }
 
-class AiException(val kind: AiErrorKind, message: String? = null) : Exception(message)
+/** [retryAfterMs] = isi header Retry-After dari server (kalau ada), dipakai untuk menunda retry kuota. */
+class AiException(val kind: AiErrorKind, message: String? = null, val retryAfterMs: Long? = null) : Exception(message)
 
 class LyricsAnalyzer(cacheDir: File) {
     private val dir = File(cacheDir, "lyrics_analysis").apply { mkdirs() }
@@ -114,26 +117,17 @@ class LyricsAnalyzer(cacheDir: File) {
                     .put("responseSchema", SCHEMA),
             )
 
-        var last: AiException? = null
-        repeat(2) { attempt ->
+        val analysis = withRetry {
             try {
-                val text = call(deviceId, modelId, body)
-                val analysis = LyricsAnalysis.fromJson(JSONObject(stripFences(text)))
-                runCatching { cacheFile(videoId, lang, modelId).writeText(analysis.toJson().toString()) }
-                return@withContext analysis
-            } catch (e: AiException) {
-                last = e
-                // Coba ulang otomatis sekali hanya untuk gangguan sementara / JSON rusak.
-                if (attempt == 1 || e.kind !in RETRYABLE) throw e
+                LyricsAnalysis.fromJson(JSONObject(stripFences(call(deviceId, modelId, body))))
             } catch (e: org.json.JSONException) {
-                last = AiException(AiErrorKind.Parse)
-                if (attempt == 1) throw last!!
+                throw AiException(AiErrorKind.Parse)
             } catch (e: IllegalArgumentException) {
-                last = AiException(AiErrorKind.Parse)
-                if (attempt == 1) throw last!!
+                throw AiException(AiErrorKind.Parse)
             }
         }
-        throw last ?: AiException(AiErrorKind.Server)
+        runCatching { cacheFile(videoId, lang, modelId).writeText(analysis.toJson().toString()) }
+        analysis
     }
 
     /**
@@ -162,11 +156,7 @@ class LyricsAnalyzer(cacheDir: File) {
             .put("systemInstruction", textContent(null, SYSTEM_CHAT))
             .put("contents", contents)
             .put("generationConfig", JSONObject().put("temperature", 0.7))
-        try {
-            call(deviceId, modelId, body).trim()
-        } catch (e: AiException) {
-            if (e.kind in RETRYABLE) call(deviceId, modelId, body).trim() else throw e
-        }
+        withRetry { call(deviceId, modelId, body).trim() }
     }
 
     /**
@@ -190,11 +180,7 @@ class LyricsAnalyzer(cacheDir: File) {
             .put("systemInstruction", textContent(null, SYSTEM_GENERAL + " Bahasa jawaban: " + lang + "."))
             .put("contents", contents)
             .put("generationConfig", JSONObject().put("temperature", 0.7))
-        try {
-            call(deviceId, modelId, body).trim()
-        } catch (e: AiException) {
-            if (e.kind in RETRYABLE) call(deviceId, modelId, body).trim() else throw e
-        }
+        withRetry { call(deviceId, modelId, body).trim() }
     }
 
     /**
@@ -222,9 +208,12 @@ class LyricsAnalyzer(cacheDir: File) {
         var received = false
         if (tools != null) {
             try {
-                return@withContext agent(deviceId, modelId, chatContents(history, question), lang, tools, onStatus, onReset) {
-                    received = true
-                    onText(it)
+                // Server/Parse tidak diulang di sini: jalur tanpa alat di bawah sudah jadi percobaan ulangnya.
+                return@withContext withRetry(kinds = setOf(AiErrorKind.Network, AiErrorKind.Quota), canRetry = { !received }) {
+                    agent(deviceId, modelId, chatContents(history, question), lang, tools, onStatus, onReset) {
+                        received = true
+                        onText(it)
+                    }
                 }
             } catch (e: AiException) {
                 onStatus(null)
@@ -237,10 +226,8 @@ class LyricsAnalyzer(cacheDir: File) {
             .put("contents", chatContents(history, question))
             .put("generationConfig", JSONObject().put("temperature", 0.7))
         var got = false
-        try {
+        withRetry(canRetry = { !got }) {
             streamTurn(deviceId, modelId, body) { got = true; onText(it) }.text.trim()
-        } catch (e: AiException) {
-            if (!got && e.kind in RETRYABLE) streamTurn(deviceId, modelId, body) { onText(it) }.text.trim() else throw e
         }
     }
 
@@ -291,6 +278,8 @@ class LyricsAnalyzer(cacheDir: File) {
             val results = coroutineScope {
                 turn.calls.map { c -> async { c to tools.run(c.name, c.args) } }.awaitAll()
             }
+            // Alat sudah selesai: indikator padam, jangan tampil lagi selama AI menulis jawaban.
+            onStatus(null)
             val responses = JSONArray()
             for ((c, result) in results) {
                 responses.put(
@@ -332,7 +321,7 @@ class LyricsAnalyzer(cacheDir: File) {
                     val raw = resp.body?.string().orEmpty()
                     val err = runCatching { JSONObject(raw).optJSONObject("error") }.getOrNull()
                     val msg = err?.optString("message").orEmpty()
-                    throw httpError(resp.code, msg, err?.optString("status").orEmpty())
+                    throw httpError(resp.code, msg, err?.optString("status").orEmpty(), retryAfterMs(resp))
                 }
                 val source = resp.body?.source() ?: throw AiException(AiErrorKind.Parse)
                 while (true) {
@@ -386,15 +375,54 @@ class LyricsAnalyzer(cacheDir: File) {
         return Turn(acc.toString(), rawParts, calls)
     }
 
-    private fun httpError(code: Int, msg: String, status: String = ""): AiException = when {
+    /** Header Retry-After (detik) -> milidetik; null kalau tidak ada atau bukan angka. */
+    private fun retryAfterMs(resp: okhttp3.Response): Long? =
+        resp.header("Retry-After")?.trim()?.toLongOrNull()?.takeIf { it >= 0 }?.times(1000)
+
+    private fun httpError(code: Int, msg: String, status: String = "", retryAfterMs: Long? = null): AiException = when {
         // Status dari proxy Olyuno: Olyuno AI dimatikan admin / belum ada kunci aktif.
         status == "AI_DISABLED" || status == "NO_KEY" -> AiException(AiErrorKind.NoKey, msg)
         code == 404 -> AiException(AiErrorKind.ModelNotFound, msg)
-        code == 429 -> AiException(AiErrorKind.Quota, msg)
+        code == 429 -> AiException(AiErrorKind.Quota, msg, retryAfterMs)
         code == 401 || code == 403 -> AiException(AiErrorKind.BadKey, msg)
         code == 400 && (msg.contains("API key", true) || msg.contains("API_KEY", true)) -> AiException(AiErrorKind.BadKey, msg)
         code == 400 && msg.contains("not found", true) -> AiException(AiErrorKind.ModelNotFound, msg)
         else -> AiException(AiErrorKind.Server, msg)
+    }
+
+    /**
+     * Jalankan [block] dan ulangi otomatis kalau gagal dengan gangguan sementara (lihat [retryDelayMs]).
+     * [kinds] membatasi jenis galat yang boleh diulang (null = semua yang layak); [canRetry] dicek sebelum tiap ulangan,
+     * mis. false kalau teks jawaban sudah sempat tampil supaya tidak dobel. Pembatalan coroutine tidak pernah diulang.
+     */
+    private suspend fun <T> withRetry(
+        kinds: Set<AiErrorKind>? = null,
+        canRetry: () -> Boolean = { true },
+        block: suspend () -> T,
+    ): T {
+        var attempt = 0
+        while (true) {
+            try {
+                return block()
+            } catch (e: AiException) {
+                val wait = if (kinds == null || e.kind in kinds) retryDelayMs(e, attempt) else null
+                if (wait == null || !canRetry()) throw e
+                attempt++
+                delay(wait)
+            }
+        }
+    }
+
+    /** Jeda sebelum ulangan ke-([attempt]+1), atau null kalau tidak boleh diulang lagi. */
+    private fun retryDelayMs(e: AiException, attempt: Int): Long? = when (e.kind) {
+        // Gangguan server / JSON rusak: 2 ulangan, jeda 1 dtk lalu 2 dtk (+ jitter).
+        AiErrorKind.Server, AiErrorKind.Parse ->
+            if (attempt < MAX_RETRIES) (1000L shl attempt) + Random.nextLong(0, 300) else null
+        // Timeout / koneksi putus: cukup 1 ulangan, karena read timeout saja sudah 60 dtk.
+        AiErrorKind.Network -> if (attempt < 1) 1500L else null
+        // Kuota: 1 ulangan, hanya kalau server memberi Retry-After yang pendek. Kuota habis -> tombol "Coba lagi".
+        AiErrorKind.Quota -> e.retryAfterMs?.takeIf { attempt < 1 && it <= MAX_QUOTA_WAIT_MS }
+        else -> null
     }
 
     private fun call(deviceId: String, modelId: String, body: JSONObject): String {
@@ -409,7 +437,7 @@ class LyricsAnalyzer(cacheDir: File) {
                 if (!resp.isSuccessful) {
                     val err = runCatching { JSONObject(raw).optJSONObject("error") }.getOrNull()
                     val msg = err?.optString("message").orEmpty()
-                    throw httpError(resp.code, msg, err?.optString("status").orEmpty())
+                    throw httpError(resp.code, msg, err?.optString("status").orEmpty(), retryAfterMs(resp))
                 }
                 val json = JSONObject(raw)
                 if (json.optJSONObject("promptFeedback")?.optString("blockReason").orEmpty().isNotEmpty()) {
@@ -444,6 +472,35 @@ class LyricsAnalyzer(cacheDir: File) {
         const val MAX_TURNS = 8
         const val MAX_CHAT_TURNS = 20
         const val MAX_TOOL_ROUNDS = 5
+        const val MAX_RETRIES = 2
+        const val MAX_QUOTA_WAIT_MS = 5_000L
+        /**
+         * Pengetahuan Olyuno AI tentang aplikasi Olyuno sendiri (fitur, letak menu, cara pakai). Ringkas supaya hemat token;
+         * perbarui kalau ada fitur / menu baru. Disambungkan ke SYSTEM_GENERAL (otomatis ikut SYSTEM_TOOLS) dan SYSTEM_CHAT.
+         */
+        const val APP_GUIDE =
+            " TENTANG APLIKASI OLYUNO: Olyuno adalah pemutar musik Android (sumber musik: YouTube Music) buatan PINZZ. Kalau pengguna bertanya soal aplikasi ini (fitur, letak menu, cara memakai, pengaturan), jawab dari panduan ini TANPA memakai alat, singkat dan berupa langkah yang jelas, tanpa blok [[LAGU]] dan sejenisnya. Hanya sebut fitur yang ada di panduan ini; kalau yang ditanyakan tidak tercantum, katakan jujur bahwa kamu tidak melihatnya di Olyuno, jangan mengarang menu atau langkah. " +
+            "Bilah bawah punya 4 tab: Beranda, Cari, Koleksi, Anda. " +
+            "BERANDA: salam sesuai waktu, Lanjutkan, Pilihan cepat, Mix untukmu, Sedang trending, Rilis baru, Andalanmu, Dengarkan lagi, Paling sering diputar, rekomendasi Genre dan Mirip dengan lagu yang kamu dengar. " +
+            "CARI: cari lagu, artis, album, playlist; ada saran pencarian, riwayat pencarian, dan input suara (dikte). " +
+            "KOLEKSI: Disukai, Diunduh, Playlist saya (buat playlist baru, lalu tambah lagu lewat menu titik tiga lagu; titik tiga di tiap playlist membuka menu berisi Putar, Acak, Tambah semua ke antrean, Ganti nama, Tambahkan ke YouTube Music, Perbarui di YouTube Music, Buka di YouTube Music, Bagikan tautan, Lepas tautan YouTube Music, dan Hapus playlist; menu YouTube Music butuh login dan playlist dikirim sebagai playlist pribadi, lagu perangkat tidak ikut terkirim, dan menghapus playlist di Olyuno tidak menghapusnya di YouTube Music), Lagu perangkat (lagu di penyimpanan HP, perlu izin akses), Terakhir dilihat. " +
+            "ANDA: Akun (Masuk dengan Google untuk memuat album, artis, dan podcast dari akun YouTube Music; bisa Keluar), Cari lagu, Olyuno AI (obrolan ini), Riwayat lagu, Statistik & Rekap, Streak, Ekualiser, Ekspor data, Impor data, Pengaturan, Informasi (pengumuman dari Olyuno), Tentang Olyuno. " +
+            "PEMUTAR: antrean (putar berikutnya, naikkan, turunkan, hapus, bersihkan), acak, ulangi, Mulai radio dari sebuah lagu, tambah ke playlist, unduh, bagikan lagu, timer tidur (berhenti di akhir lagu atau setelah waktu tertentu, volume bisa dipudarkan), kecepatan pemutaran (nada bisa dijaga tetap). Menu titik tiga di layar pemutar (Pemutaran) berisi Timer tidur, Unduh, Mulai radio, Tambah ke playlist, slider volume perangkat, Normalisasi volume, dan Jaga layar tetap hidup (pengaturan yang sama dengan di menu lirik). " +
+            "LIRIK: lirik tersinkron per baris (Lyrics Plus bisa per kata), cari kata di dalam lirik, terjemahkan lirik ke 37 bahasa (termasuk Indonesia, Inggris, Jawa, Sunda), bagikan lirik, jaga layar tetap hidup. Sumber lirik dipilih di menu lirik atau Pengaturan > Lirik: Otomatis, LRCLIB, Better Lyrics, BiniLyrics, Lyrics Plus. " +
+            "CARI LAGU (Anda > Cari lagu): ketuk mikrofon lalu nyanyikan atau ucapkan potongan lirik atau judul; suara diubah jadi teks oleh pengenal suara perangkat lalu dicari di YouTube Music. Butuh izin mikrofon dan internet. " +
+            "OLYUNO AI: punya dua model, Olyuno 1.0 (model buatan Olyuno sendiri, berjalan lokal di server Olyuno) dan Olyuno 2.0 (bukan buatan Olyuno sendiri, memakai Gemini dari Google); bisa mengobrol soal musik, mencari lagu, artis, album, playlist, mencari lagu dari potongan lirik, menjelaskan makna lirik, membuatkan playlist di Olyuno, dan (kalau diminta dan sudah login) mengirim playlist itu ke akun YouTube Music. Model diganti di kanan atas (Olyuno 1.0 atau Olyuno 2.0). Ada Obrolan baru dan Riwayat chat. Pemakaian gratis ada batasnya. " +
+            "STATISTIK & REKAP: lagu, artis, album, dan playlist teratas per periode, plus kartu rekap yang bisa dibagikan. " +
+            "STREAK: hari beruntun mendengarkan. Sehari terhitung kalau 1 lagu didengar sampai 80% (atau 2 menit), atau total 5 menit. Freeze menyelamatkan streak saat 1 hari terlewat: dapat 1 tiap 7 hari streak, maksimal 2. " +
+            "EKUALISER: ekualiser dan penguat bass. " +
+            "EKSPOR/IMPOR DATA: cadangan berisi lagu disukai, riwayat putar, hitungan putar, riwayat pencarian, statistik, dan streak; file lagu yang diunduh tidak ikut. " +
+            "PENGATURAN: Bahasa (Indonesia atau English, ikut bahasa perangkat; bahasa lain memakai English), Tampilan (gaya Kaca atau Biasa, warna kustom atau otomatis dari cover lagu, background player dan lirik, animasi, refresh rate tinggi, Penghemat baterai, Dynamic Island), Pemutaran, Lirik, Notifikasi, Penyimpanan, Tentang Olyuno, Keluar. " +
+            "PEMUTARAN (pengaturan): Kualitas audio (Otomatis: tinggi di Wi-Fi, rendah di data seluler; Rendah; Tinggi), Hemat data (kualitas rendah, fitur boros data dimatikan, unduhan hanya Wi-Fi), Unduh hanya lewat Wi-Fi, Normalisasi volume, Lewati bagian hening, Putar otomatis (lanjut ke lagu serupa saat antrean habis), Lanjutkan terakhir diputar, Lanjut saat headset tersambung lagi dalam 10 menit. " +
+            "DYNAMIC ISLAND: kartu info lagu melayang di atas layar, perlu izin tampil di atas aplikasi lain; bentuk, sudut, dan perilaku kartu bisa diatur. " +
+            "NOTIFIKASI: kontrol musik, progres dan hasil unduhan (ada tombol ulangi kalau gagal), pengingat streak, pengumuman baru. " +
+            "PENYIMPANAN: lihat ruang terpakai; hapus cache audio, gambar, lirik, unduhan, riwayat pencarian, riwayat putar; atur batas cache audio (lagu paling lama tidak diputar dihapus otomatis). " +
+            "UNDUHAN: unduh lagu, album, atau playlist untuk didengar offline; ada notifikasi progres, dan unduhan yang gagal bisa diulangi. " +
+            "Kalau ada masalah teknis, sarankan Tentang Olyuno > Salin semua info, lalu laporkan ke pengembang. Jangan menyebut detail teknis internal, nama server, atau kode."
+
         const val SYSTEM_GENERAL =
             "Kamu Olyuno AI, asisten AI di aplikasi musik Olyuno. Olyuno dikembangkan oleh PINZZ, seorang solo developer (mengerjakannya sendirian, tanpa tim). Kalau ditanya siapa yang membuat atau mengembangkan Olyuno, jawab itu dan jangan menambah detail tentang dirinya yang tidak kamu ketahui. Bantu pengguna soal musik: makna lirik, latar belakang lagu, artis, album, genre, playlist, rekomendasi. " +
                 "Gaya jawaban: langsung ke inti, tanpa basa-basi pembuka (jangan mulai dengan \"Tentu\", \"Baik\", atau mengulang pertanyaan). Kalimat pertama sudah memuat jawaban utamanya. " +
@@ -461,16 +518,19 @@ class LyricsAnalyzer(cacheDir: File) {
                 "Blok album: [[ALBUM]] lalu satu album per baris berformat Judul | Artis, lalu [[/ALBUM]]. " +
                 "Blok playlist: [[PLAYLIST]] lalu satu playlist per baris berformat Judul | Pembuat, lalu [[/PLAYLIST]] (untuk playlist, tulis judul yang bisa dipakai untuk mencarinya). " +
                 "Jangan menulis label atau judul seperti \"Lagu:\" atau \"Artis:\" sebelum blok; tulis penandanya saja. " +
-                "Tulis hanya blok yang relevan, maksimal 5 item per blok, hanya yang nyata dan kamu yakin ada, urut dari yang paling dibahas. Kalau tidak ada yang dibahas, jangan tulis blok apa pun."
+                "Tulis hanya blok yang relevan, maksimal 5 item per blok, hanya yang nyata dan kamu yakin ada, urut dari yang paling dibahas. Kalau tidak ada yang dibahas, jangan tulis blok apa pun." +
+            APP_GUIDE
 
         /** SYSTEM_GENERAL + aturan memakai alat. Dipakai hanya saat alat dikirim bersama permintaan. */
         const val SYSTEM_TOOLS = SYSTEM_GENERAL +
             " ALAT: kamu punya alat untuk mencari di YouTube Music dan layanan lirik; panggil sendiri, jangan minta pengguna yang mencari. " +
-            "Untuk setiap permintaan mencari atau merekomendasikan lagu, artis, album, atau playlist, WAJIB pakai alatnya (search_songs, search_artists, search_albums, search_playlists, get_collection_tracks), jangan menjawab dari ingatan. " +
-            "Kalau pengguna hanya ingat potongan lirik atau menceritakan isi liriknya, panggil search_lyrics dengan potongan itu. Kalau hasilnya tidak cocok tapi kamu punya tebakan judulnya, verifikasi dengan check_lyrics sebelum menyebutnya. " +
-            "Untuk pertanyaan makna atau arti lirik sebuah lagu, ambil liriknya dengan get_lyrics lebih dulu. " +
+            "ATURAN UTAMA: setiap pertanyaan yang menyebut lagu, artis, album, playlist, atau lirik tertentu WAJIB dijawab setelah memakai alat, bukan dari ingatan. Jangan pernah menjawab langsung untuk hal itu. " +
+            "Pilih sendiri alat yang paling cocok: arti, makna, atau maksud sebuah lagu = get_lyrics dulu lalu jelaskan dari liriknya; mencari atau merekomendasikan lagu = search_songs; artis, album, atau playlist = search_artists, search_albums, search_playlists; isi album, playlist, atau lagu populer artis = get_collection_tracks; potongan lirik yang diingat pengguna = search_lyrics, lalu check_lyrics untuk memverifikasi tebakan judul. " +
+            "Pertanyaan yang tidak ada hubungannya dengan musik (sapaan, obrolan umum) dan pertanyaan tentang aplikasi Olyuno sendiri (fitur, menu, cara pakai) dijawab langsung tanpa alat. " +
+            "MEMBUAT PLAYLIST: kalau pengguna meminta dibuatkan playlist, cari lagunya dulu (search_songs atau get_collection_tracks), tunggu hasilnya, baru panggil create_playlist dengan judul dan artis persis seperti di hasil alat (maksimal 30 lagu); jangan memanggilnya bersamaan dengan pencarian. Isi add_to_youtube_music = true HANYA kalau pengguna jelas meminta playlist itu juga dimasukkan ke akun YouTube Music-nya. Untuk playlist yang sudah ada, pakai add_playlist_to_youtube_music saat pengguna memintanya. Jangan membuat atau mengirim playlist kalau pengguna hanya bertanya atau minta rekomendasi. Hasil not_signed_in = beri tahu pengguna untuk masuk lewat tab Anda > Masuk dengan Google (playlist di Olyuno tetap sudah dibuat); jangan bilang sudah masuk ke YouTube Music kecuali youtube_music bernilai created atau updated. Sebut jumlah lagu yang masuk dan lagu yang tidak ditemukan (kalau ada) apa adanya; playlist di YouTube Music dibuat sebagai pribadi. " +
             "Boleh memanggil beberapa alat sekaligus, dan memanggil lagi kalau hasil pertama kurang. Sebut hanya lagu, artis, album, atau playlist yang muncul di hasil alat; jangan mengarang. " +
             "match \"exact\" = potongan lirik ditemukan utuh di lirik lagu itu, \"partial\" = sebagian cocok, \"no_lyrics\" = liriknya tidak tersedia sehingga tidak bisa dipastikan. " +
+            "Kalau lirik tidak tersedia untuk menjelaskan makna, katakan jujur lalu jelaskan seperlunya dengan menyebut bahwa itu bukan dari liriknya. " +
             "Kalau tidak ada hasil yang yakin, katakan jujur dan tawarkan cara lain. Jangan menyebut nama alat atau istilah teknis kepada pengguna. " +
             "Blok [[LAGU]], [[ARTIS]], [[ALBUM]], [[PLAYLIST]] di akhir jawaban diisi dari hasil alat dengan judul dan artis persis seperti di hasil."
 
@@ -484,7 +544,8 @@ class LyricsAnalyzer(cacheDir: File) {
                 "Isi 'background' dengan null jika tidak yakin."
         const val SYSTEM_CHAT =
             "Kamu analis lirik musik yang menjawab pertanyaan lanjutan tentang satu lagu. Olyuno dikembangkan oleh PINZZ, seorang solo developer (mengerjakannya sendirian, tanpa tim). Kalau ditanya siapa yang membuat atau mengembangkan Olyuno, jawab itu dan jangan menambah detail tentang dirinya yang tidak kamu ketahui. Jawab ringkas, ramah, dalam bahasa yang diminta. " +
-                "Jangan mengarang fakta; kalau tidak yakin, katakan. Jangan menyalin lirik, kutipan paling banyak di bawah 15 kata."
+                "Jangan mengarang fakta; kalau tidak yakin, katakan. Jangan menyalin lirik, kutipan paling banyak di bawah 15 kata." +
+            APP_GUIDE
 
         val SCHEMA: JSONObject = JSONObject()
             .put("type", "OBJECT")

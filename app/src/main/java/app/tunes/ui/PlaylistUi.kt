@@ -25,6 +25,7 @@ import androidx.compose.material.icons.rounded.ArrowDownward
 import androidx.compose.material.icons.rounded.ArrowUpward
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.MoreHoriz
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.QueueMusic
@@ -197,6 +198,8 @@ fun LocalPlaylistsPage(
     var showCreate by remember { mutableStateOf(false) }
     var renaming by remember { mutableStateOf<LocalPlaylist?>(null) }
     var deleting by remember { mutableStateOf<LocalPlaylist?>(null) }
+    var menuForId by remember { mutableStateOf<Long?>(null) }
+    val links by vm.playlistLinks.collectAsStateWithLifecycle()
 
     PageSurface {
         MiniPlayerScaffold(
@@ -244,15 +247,27 @@ fun LocalPlaylistsPage(
                     PlaylistRow(
                         modifier = smoothItem(),
                         playlist = pl,
+                        linked = pl.id in links,
                         onClick = { onOpen(pl.id) },
-                        onRename = { renaming = pl },
-                        onDelete = { deleting = pl },
+                        onMenu = { menuForId = pl.id },
                     )
                 }
             }
         }
     }
 
+    // Titik tiga di tiap baris: bottom sheet (putar, acak, antrean, ganti nama, YouTube Music, hapus).
+    val menuPlaylist = playlists.firstOrNull { it.id == menuForId }
+    if (menuPlaylist != null) {
+        PlaylistMenuSheet(
+            vm = vm,
+            playlist = menuPlaylist,
+            ytId = links[menuPlaylist.id],
+            onRename = { renaming = menuPlaylist },
+            onDelete = { deleting = menuPlaylist },
+            onDismiss = { menuForId = null },
+        )
+    }
     if (showCreate) {
         PlaylistNameDialog(
             title = t("Playlist baru"),
@@ -294,11 +309,10 @@ fun LocalPlaylistsPage(
 private fun PlaylistRow(
     modifier: Modifier,
     playlist: LocalPlaylist,
+    linked: Boolean,
     onClick: () -> Unit,
-    onRename: () -> Unit,
-    onDelete: () -> Unit,
+    onMenu: () -> Unit,
 ) {
-    var menuOpen by remember { mutableStateOf(false) }
     Row(
         modifier = modifier
             .fillMaxWidth()
@@ -312,32 +326,13 @@ private fun PlaylistRow(
         Column(Modifier.weight(1f)) {
             Text(playlist.name, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(
-                t("%d lagu", playlist.songs.size),
+                t("%d lagu", playlist.songs.size) + if (linked) " · YouTube Music" else "",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        androidx.compose.foundation.layout.Box {
-            IconButton(onClick = { menuOpen = true }) {
-                Icon(Icons.Rounded.MoreVert, contentDescription = t("Menu"))
-            }
-            DropdownMenu(
-                expanded = menuOpen,
-                onDismissRequest = { menuOpen = false },
-                containerColor = glassMenuColor(),
-                border = glassEdge(),
-            ) {
-                DropdownMenuItem(
-                    text = { Text(t("Ganti nama")) },
-                    leadingIcon = { Icon(Icons.Rounded.Edit, null) },
-                    onClick = { menuOpen = false; onRename() },
-                )
-                DropdownMenuItem(
-                    text = { Text(t("Hapus playlist")) },
-                    leadingIcon = { Icon(Icons.Rounded.Delete, null) },
-                    onClick = { menuOpen = false; onDelete() },
-                )
-            }
+        IconButton(onClick = onMenu) {
+            Icon(Icons.Rounded.MoreHoriz, contentDescription = t("Menu"))
         }
     }
 }

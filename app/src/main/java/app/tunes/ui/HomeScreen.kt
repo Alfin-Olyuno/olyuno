@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -27,6 +28,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowForward
+import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import app.tunes.MixStatus
@@ -96,6 +98,8 @@ fun HomeScreen(
     onOpenLiked: () -> Unit,
     onOpenAccount: () -> Unit,
     onOpenStreak: () -> Unit = {},
+    /** Buka Olyuno AI; [String] = pertanyaan yang langsung dikirim, null = obrolan kosong. */
+    onOpenAi: (String?) -> Unit = {},
 ) {
     // Cek ulang tiap menit supaya sapaan ikut berganti saat jam berubah.
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
@@ -161,6 +165,9 @@ fun HomeScreen(
                 }
             }
         }
+
+        // ---- Tanya Olyuno AI: kartu dengan saran pertanyaan; ketuk saran = obrolan baru yang langsung dikirim.
+        item(key = "ai_card") { AiHomeCard(now = now, lastSong = recent.firstOrNull(), onOpenAi = onOpenAi) }
 
         // ---- Lanjutkan: lagu yang terakhir diputar, 2 baris tumbuh ke kanan seperti "Sedang trending".
         // Disembunyikan sepenuhnya kalau belum ada riwayat putar.
@@ -710,6 +717,111 @@ private fun MoodChip(genre: CollectionRef, onClick: () -> Unit) {
             style = MaterialTheme.typography.labelLarge,
             maxLines = 1,
         )
+    }
+}
+
+// --------------------------------------------------------------- Olyuno AI
+
+/** Satu saran di kartu Olyuno AI: [label] tampil di chip, [prompt] dikirim ke Olyuno AI. */
+private class AiSuggestion(val label: String, val prompt: String)
+
+/** Saran menurut jam (sama dengan sapaan), lalu yang berdasar lagu terakhir diputar (kalau ada), lalu umum. */
+private fun aiSuggestions(nowMs: Long, last: SongItem?): List<AiSuggestion> {
+    val hour = Calendar.getInstance().apply { timeInMillis = nowMs }.get(Calendar.HOUR_OF_DAY)
+    val byTime = when (hour) {
+        in 5..11 -> AiSuggestion(t("Lagu penyemangat pagi"), t("Carikan lagu penyemangat untuk pagi hari"))
+        in 12..14 -> AiSuggestion(t("Lagu buat fokus"), t("Carikan lagu yang cocok untuk fokus bekerja"))
+        in 15..17 -> AiSuggestion(t("Lagu santai sore"), t("Carikan lagu santai untuk sore hari"))
+        else -> AiSuggestion(t("Lagu tenang malam"), t("Carikan lagu tenang untuk malam hari"))
+    }
+    return buildList {
+        add(byTime)
+        if (last != null && last.title.isNotBlank()) {
+            add(AiSuggestion(t("Mirip lagu terakhir"), t("Carikan lagu yang mirip dengan \"%s\" oleh %s", last.title, last.artist)))
+            add(AiSuggestion(t("Makna lagu terakhir"), t("Jelaskan makna lagu \"%s\" oleh %s.", last.title, last.artist)))
+        }
+        add(AiSuggestion(t("Buatkan playlist"), t("Buatkan playlist dari lagu-lagu baru yang mungkin kusukai")))
+    }
+}
+
+/**
+ * Kartu "Olyuno AI" di Beranda: judul + panah (ketuk = buka Olyuno AI dengan obrolan kosong) dan deretan chip saran
+ * yang bisa digeser (ketuk = obrolan baru yang langsung mengirim saran itu).
+ */
+@Composable
+private fun AiHomeCard(now: Long, lastSong: SongItem?, onOpenAi: (String?) -> Unit) {
+    val suggestions = remember(now / 60_000, lastSong?.videoId, lastSong?.title, lastSong?.artist, app.tunes.i18n.I18n.effective) {
+        aiSuggestions(now, lastSong)
+    }
+    val shape = RoundedCornerShape(24.dp)
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .clip(shape)
+            .background(glassContainer(MaterialTheme.colorScheme.surfaceContainerHigh))
+            .then(
+                if (LocalGlass.current.enabled) Modifier.border(0.5.dp, MaterialTheme.colorScheme.outlineVariant, shape)
+                else Modifier,
+            ),
+    ) {
+        Row(
+            Modifier.fillMaxWidth().clickable { onOpenAi(null) }.padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                Modifier.size(36.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primaryContainer),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.Rounded.AutoAwesome,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    text = t("Olyuno AI"),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                )
+                Text(
+                    text = t("Mau dengar apa hari ini?"),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Spacer(Modifier.width(8.dp))
+            Icon(
+                Icons.AutoMirrored.Rounded.ArrowForward,
+                contentDescription = t("Olyuno AI"),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(20.dp),
+            )
+        }
+        LazyRow(
+            modifier = Modifier.padding(bottom = 14.dp),
+            contentPadding = PaddingValues(horizontal = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            items(suggestions, key = { it.label }) { sug ->
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(MaterialTheme.colorScheme.surfaceContainerHighest)
+                        .clickable { onOpenAi(sug.prompt) }
+                        .padding(horizontal = 14.dp, vertical = 9.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(text = sug.label, style = MaterialTheme.typography.labelLarge, maxLines = 1)
+                }
+            }
+        }
     }
 }
 
