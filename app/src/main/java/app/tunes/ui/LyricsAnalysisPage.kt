@@ -267,7 +267,8 @@ fun LyricsAnalysisPage(
                 val greetingSeed = remember(convoId) { kotlin.random.Random.nextInt() }
                 Box(Modifier.fillMaxWidth().weight(1f)) {
                 // Obrolan kosong: sapaan di tengah layar (di atas area chip / kolom input), memudar saat obrolan dimulai.
-                AnimatedVisibility(
+                // Dipanggil dengan nama lengkap: di dalam Column, "AnimatedVisibility" biasa terbaca sebagai versi ColumnScope.
+                androidx.compose.animation.AnimatedVisibility(
                     visible = chat.isEmpty() && !chatBusy,
                     enter = fadeIn(),
                     exit = fadeOut(),
