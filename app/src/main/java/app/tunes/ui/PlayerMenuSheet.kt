@@ -28,7 +28,7 @@ import app.tunes.i18n.t
 
 /**
  * Menu singkat di halaman player (tombol titik tiga di sebelah "Sedang diputar"):
- * Timer tidur, Unduh lagu yang sedang diputar, slider volume perangkat, Normalisasi volume, dan Jaga layar tetap hidup.
+ * Timer tidur, Unduh lagu yang sedang diputar, Mulai radio, Tambah ke playlist, Olyuno AI, slider volume perangkat, Normalisasi volume, dan Jaga layar tetap hidup.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -43,6 +43,8 @@ fun PlayerMenuSheet(
     isLocal: Boolean,
     onStartRadio: () -> Unit,
     onAddToPlaylist: () -> Unit,
+    /** Buka Olyuno AI untuk lagu yang sedang diputar (dulu ada di menu lirik). */
+    onOpenAi: () -> Unit,
     normalizeVolume: Boolean,
     onNormalizeVolumeChange: (Boolean) -> Unit,
     /** Sama dengan "Jaga layar tetap hidup" di menu lirik dan Pengaturan > Lirik (satu pengaturan yang sama). */
@@ -84,6 +86,7 @@ fun PlayerMenuSheet(
                     SheetActionRow(t("Mulai radio"), Icons.Rounded.Radio, onStartRadio)
                 }
                 SheetActionRow(t("Tambah ke playlist"), Icons.Rounded.LibraryAdd, onAddToPlaylist)
+                SheetActionRow(t("Olyuno AI"), OlyunoAiIcon, onOpenAi)
                 DeviceVolumeSlider(Modifier.padding(horizontal = 4.dp, vertical = 12.dp))
                 ToggleRow(t("Normalisasi volume"), normalizeVolume, onNormalizeVolumeChange)
                 ToggleRow(t("Jaga layar tetap hidup"), keepAwake, onKeepAwakeChange)

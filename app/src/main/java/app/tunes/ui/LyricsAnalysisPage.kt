@@ -28,6 +28,7 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.awaitEachGesture
 import kotlinx.coroutines.Job
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
@@ -257,10 +258,34 @@ fun LyricsAnalysisPage(
                         onSelect = { vm.aiPrefs.setModel(it) },
                     )
                 }
+                // Daftar chat menjangkau sampai bawah; chip dan kolom input melayang di atasnya tanpa latar,
+                // jadi isi chat terlihat tembus di belakang placeholder dan chip.
+                var dockHeight by remember { mutableStateOf(0.dp) }
+                val dockDensity = LocalDensity.current
+                // Jam perangkat (ikut berubah kalau jam / zona waktu diganti); seed sapaan tetap selama satu obrolan.
+                val deviceNow by rememberDeviceNow()
+                val greetingSeed = remember(convoId) { kotlin.random.Random.nextInt() }
+                Box(Modifier.fillMaxWidth().weight(1f)) {
+                // Obrolan kosong: sapaan di tengah layar (di atas area chip / kolom input), memudar saat obrolan dimulai.
+                AnimatedVisibility(
+                    visible = chat.isEmpty() && !chatBusy,
+                    enter = fadeIn(),
+                    exit = fadeOut(),
+                    modifier = Modifier.align(Alignment.Center).padding(bottom = dockHeight / 2),
+                ) {
+                    Text(
+                        emptyChatGreeting(dayPartOf(deviceNow), greetingSeed),
+                        modifier = Modifier.padding(horizontal = 36.dp),
+                        style = MaterialTheme.typography.headlineMedium,
+                        fontWeight = FontWeight.Medium,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                }
                 LazyColumn(
-                    Modifier.fillMaxWidth().weight(1f),
+                    Modifier.fillMaxSize(),
                     state = listState,
-                    contentPadding = PaddingValues(top = 4.dp, bottom = 16.dp),
+                    contentPadding = PaddingValues(top = 4.dp, bottom = dockHeight + 16.dp),
                     verticalArrangement = Arrangement.spacedBy(14.dp),
                 ) {
                     itemsIndexed(chat) { index, m ->
@@ -298,19 +323,34 @@ fun LyricsAnalysisPage(
                         }
                     }
                 }
-                // Obrolan masih kosong: satu chip pertanyaan (berganti tiap obrolan baru); ketuk = langsung dikirim.
+                Column(
+                    Modifier
+                        .align(Alignment.BottomCenter)
+                        .onSizeChanged { dockHeight = with(dockDensity) { it.height.toDp() } },
+                ) {
+                // Obrolan masih kosong: tiga chip pertanyaan dari kiri ke kanan (bisa digeser). Satu mengikuti jam perangkat,
+                // dua umum; berganti tiap obrolan baru. Ketuk = langsung dikirim.
                 if (chat.isEmpty() && !chatBusy) {
-                    val question = t(remember(convoId) { OLYUNO_AI_QUESTIONS.random() })
-                    Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp)) {
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(MaterialTheme.colorScheme.surfaceContainerHighest)
-                                .clickable { vm.sendMessage(question) }
-                                .padding(horizontal = 14.dp, vertical = 9.dp),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text(question, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    val part = dayPartOf(deviceNow)
+                    val chips = remember(convoId, part, app.tunes.i18n.I18n.effective) { emptyChatChips(part, greetingSeed) }
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState())
+                            .padding(horizontal = 20.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        chips.forEach { question ->
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .background(MaterialTheme.colorScheme.surfaceContainerHighest)
+                                    .clickable { vm.sendMessage(question) }
+                                    .padding(horizontal = 14.dp, vertical = 9.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(question, style = MaterialTheme.typography.labelLarge, maxLines = 1)
+                            }
                         }
                     }
                 }
@@ -324,6 +364,8 @@ fun LyricsAnalysisPage(
                     // Keyboard terbuka: rapat ke keyboard. Tertutup: di atas bar navigasi / pemutar mini.
                     modifier = Modifier.padding(top = 8.dp, bottom = if (imeUp) 8.dp else LocalBottomInset.current + 8.dp),
                 )
+                }
+                }
             }
             HistoryDrawer(
                 vm = vm,
@@ -476,15 +518,6 @@ private fun UserMessage(text: String) {
         }
     }
 }
-
-/** Pertanyaan untuk chip di halaman Olyuno AI yang masih kosong (dipilih acak; diterjemahkan lewat [t]). */
-private val OLYUNO_AI_QUESTIONS = listOf(
-    "Olyuno ada fitur apa saja?",
-    "Carikan lagu galau yang enak didengar",
-    "Rekomendasikan lagu buat malam ini",
-    "Lagu apa yang lagi hits sekarang?",
-    "Buatkan playlist untuk santai di rumah",
-)
 
 /**
  * Jawaban AI: teks polos selebar halaman (tanpa gelembung / kartu), format markdown ringan.
@@ -1350,7 +1383,9 @@ private fun AskBar(
         modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp)
-            // Tanpa kotak/garis pembungkus: placeholder, mikrofon, dan kirim/stop langsung di atas latar halaman.
+            // Garis melengkung tipis yang menandai area isi pesan: placeholder, mikrofon, dan kirim/stop ada di dalamnya.
+            .background(MaterialTheme.colorScheme.background, RoundedCornerShape(28.dp)) // isi kolom padat (tidak tembus), sekelilingnya transparan
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(28.dp))
             .padding(start = 6.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

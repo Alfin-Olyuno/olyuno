@@ -73,15 +73,12 @@ import app.tunes.data.StatArtist
 
 // ------------------------------------------------------------------ sapaan
 
-/** Sapaan menurut jam di perangkat: 05.00 pagi, 12.00 siang, 15.00 sore, 18.00 malam (sampai 04.59). */
-private fun greetingFor(nowMs: Long): String {
-    val cal = Calendar.getInstance().apply { timeInMillis = nowMs }
-    return when (cal.get(Calendar.HOUR_OF_DAY)) {
-        in 5..11 -> t("Selamat pagi")
-        in 12..14 -> t("Selamat siang")
-        in 15..17 -> t("Selamat sore")
-        else -> t("Selamat malam")
-    }
+/** Sapaan menurut jam di perangkat (lihat [dayPartOf]): 05.00 pagi, 12.00 siang, 15.00 sore, 18.00 malam (sampai 04.59). */
+private fun greetingFor(nowMs: Long): String = when (dayPartOf(nowMs)) {
+    DayPart.Pagi -> t("Selamat pagi")
+    DayPart.Siang -> t("Selamat siang")
+    DayPart.Sore -> t("Selamat sore")
+    DayPart.Malam, DayPart.LarutMalam -> t("Selamat malam")
 }
 
 // ----------------------------------------------------------------- layar
@@ -100,14 +97,8 @@ fun HomeScreen(
     /** Buka Olyuno AI; [String] = pertanyaan yang langsung dikirim, null = obrolan kosong. */
     onOpenAi: (String?) -> Unit = {},
 ) {
-    // Cek ulang tiap menit supaya sapaan ikut berganti saat jam berubah.
-    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
-    LaunchedEffect(Unit) {
-        while (true) {
-            delay(60_000)
-            now = System.currentTimeMillis()
-        }
-    }
+    // Jam perangkat: berganti tiap menit dan langsung saat jam / zona waktu diubah di pengaturan perangkat.
+    val now by rememberDeviceNow()
     val greeting = greetingFor(now)
     val quickPicks by vm.quickPicks.collectAsStateWithLifecycle()
     val genres by vm.genres.collectAsStateWithLifecycle()
@@ -741,17 +732,16 @@ private const val AI_SUGGESTION_COUNT = 5
  * diacak dengan [seed] lalu diambil beberapa. Seed baru (aplikasi dibuka / Beranda dimuat ulang) = pilihan saran berubah.
  */
 private fun aiSuggestions(nowMs: Long, last: SongItem?, seed: Int): List<AiSuggestion> {
-    val hour = Calendar.getInstance().apply { timeInMillis = nowMs }.get(Calendar.HOUR_OF_DAY)
-    val byTime = when (hour) {
-        in 5..11 -> listOf(
+    val byTime = when (dayPartOf(nowMs)) {
+        DayPart.Pagi -> listOf(
             AiSuggestion(t("Lagu penyemangat pagi"), t("Carikan lagu penyemangat untuk pagi hari")),
             AiSuggestion(t("Musik teman sarapan"), t("Carikan lagu santai untuk menemani sarapan")),
         )
-        in 12..14 -> listOf(
+        DayPart.Siang -> listOf(
             AiSuggestion(t("Lagu buat fokus"), t("Carikan lagu yang cocok untuk fokus bekerja")),
             AiSuggestion(t("Lagu semangat siang"), t("Carikan lagu yang bikin semangat di siang hari")),
         )
-        in 15..17 -> listOf(
+        DayPart.Sore -> listOf(
             AiSuggestion(t("Lagu santai sore"), t("Carikan lagu santai untuk sore hari")),
             AiSuggestion(t("Lagu perjalanan pulang"), t("Carikan lagu enak buat perjalanan pulang")),
         )

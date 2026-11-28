@@ -642,6 +642,10 @@ private fun PlayerPage(
                 showPlayerMenu = false
                 vm.openPlaylistPicker(listOf(song))
             },
+            onOpenAi = {
+                showPlayerMenu = false
+                vm.requestLyricsAnalysis(song)
+            },
             onDownload = {
                 showPlayerMenu = false
                 vm.download(song)
@@ -805,10 +809,6 @@ private fun LyricsPage(
                 } else {
                     shareLyrics(lyricsContext, song.title, song.artist, text)
                 }
-            },
-            onAnalyze = {
-                showMenuSheet = false
-                vm.requestLyricsAnalysis(song)
             },
             onDismiss = { showMenuSheet = false },
         )

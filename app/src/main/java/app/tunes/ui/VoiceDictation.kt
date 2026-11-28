@@ -49,6 +49,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -216,7 +217,8 @@ internal fun SquircleButton(
     iconSize: Int = 22,
 ) {
     val scheme = MaterialTheme.colorScheme
-    val neutral = scheme.onSurface.copy(alpha = 0.08f)
+    // Padat (tidak tembus): dilapis di atas warna latar supaya isi chat di belakang tidak terlihat lewat tombol.
+    val neutral = scheme.onSurface.copy(alpha = 0.08f).compositeOver(scheme.background)
     val bg = if (accent && enabled) {
         Brush.verticalGradient(listOf(scheme.primary, lerp(scheme.primary, Color.Black, 0.22f)))
     } else {

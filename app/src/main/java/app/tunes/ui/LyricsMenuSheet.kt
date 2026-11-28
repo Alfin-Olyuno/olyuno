@@ -77,7 +77,6 @@ fun LyricsMenuSheet(
     onCopy: () -> Unit,
     onSearch: () -> Unit,
     onShare: () -> Unit,
-    onAnalyze: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -117,24 +116,6 @@ fun LyricsMenuSheet(
             SourceButton(t(sourceLabel), onOpenSource)
             ToggleRow(t("Jaga layar tetap hidup"), keepAwake, onKeepAwakeChange)
             DownloadButton(downloaded, downloadProgress, downloadFailed, onDownload)
-            val analyzeSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .pressScale(analyzeSource, 0.97f)
-                    .clip(RoundedCornerShape(16.dp))
-                    .pressClickable(analyzeSource, onClick = onAnalyze)
-                    .padding(horizontal = 4.dp, vertical = 14.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    t("Olyuno AI"),
-                    color = sheetInk,
-                    style = MaterialTheme.typography.bodyLarge,
-                    modifier = Modifier.weight(1f),
-                )
-                Icon(OlyunoAiIcon, contentDescription = null, tint = sheetInk, modifier = Modifier.size(24.dp))
-            }
             val shareSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
             Row(
                 Modifier
